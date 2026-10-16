@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0c0f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="description" content="RaceBox, instrumen telemetri kecepatan motor berbasis GPS.">
+  <title>RaceBox | GPS Telemetry</title>
+  <link rel="manifest" href="./manifest.json">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.svg">
+  <link rel="icon" type="image/svg+xml" href="./icons/favicon-32.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./css/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#speedo" aria-label="RaceBox beranda">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>RACE<span class="brand-accent">BOX</span></span>
+      </a>
+      <div class="topbar-meta">
+        <span class="connection-dot" id="connectionDot"></span>
+        <span id="userLabel">MODE TAMU</span>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <section class="view active" id="view-speedo" data-view="speedo" aria-labelledby="speedoTitle">
+        <div class="view-heading">
+          <div><p class="eyebrow">LIVE TELEMETRY <span>01 / 04</span></p><h1 id="speedoTitle">Speedometer</h1></div>
+          <button class="icon-button" id="resetSession" type="button" aria-label="Reset sesi" title="Reset sesi"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8.27M3 3v5.27h5.27M12 7v5l3.5 2"/></svg></button>
+        </div>
+        <div class="gauge-wrap">
+          <svg class="gauge" viewBox="0 0 300 300" role="img" aria-label="Pengukur kecepatan">
+            <circle class="gauge-track" cx="150" cy="150" r="125" />
+            <circle class="gauge-progress" id="gaugeProgress" cx="150" cy="150" r="125" />
+            <circle class="gauge-inner" cx="150" cy="150" r="105" />
+            <g class="gauge-ticks" aria-hidden="true"><path d="M150 25v12M238 62l-9 9M275 150h-12M62 62l9 9M25 150h12" /></g>
+          </svg>
+          <div class="gauge-readout"><div class="speed-value" id="speedValue">0</div><div class="speed-unit" id="speedUnit">KM/J</div><div class="gauge-caption">KECEPATAN SAAT INI</div></div>
+          <div class="gauge-side gauge-side-left"><span>MAX</span><strong id="maxSpeed">0</strong><small id="maxUnit">KM/J</small></div>
+          <div class="gauge-side gauge-side-right"><span>AKURASI</span><strong id="gpsAccuracy">--</strong><small>METER</small></div>
+        </div>
+        <div class="telemetry-strip">
+          <div class="telemetry-cell"><span class="metric-label">STATUS GPS</span><strong class="gps-status" id="gpsStatus"><i></i> MENUNGGU</strong></div>
+          <div class="telemetry-cell"><span class="metric-label">JARAK SESI</span><strong><span id="sessionDistance">0.00</span><small> KM</small></strong></div>
+          <div class="telemetry-cell"><span class="metric-label">WAKTU</span><strong id="sessionDuration">00:00</strong></div>
+        </div>
+        <div class="gps-note" id="gpsNote"><span class="gps-note-icon">◎</span><span>Aktifkan lokasi untuk memulai pembacaan GPS.</span></div>
+      </section>
+
+      <section class="view" id="view-drag" data-view="drag" aria-labelledby="dragTitle">
+        <div class="view-heading"><div><p class="eyebrow">TIMED RUN <span>02 / 04</span></p><h1 id="dragTitle">Drag Meter</h1></div><span class="live-chip"><i></i> GPS READY</span></div>
+        <div class="drag-selectors">
+          <label class="field-label">TEMPLATE UJI<select id="dragTemplate"></select></label>
+          <label class="field-label">MOTOR<select id="dragBike"></select></label>
+        </div>
+        <div class="start-sequence" id="startSequence" aria-label="Lampu start"><span></span><span></span><span></span><span></span><span></span></div>
+        <div class="drag-readout">
+          <div class="drag-status" id="dragStatus">SIAP UNTUK START</div>
+          <div class="drag-time" id="dragTime">0.00<span> s</span></div>
+          <div class="drag-progress-track"><div id="dragProgressBar"></div></div>
+          <div class="drag-stats"><div><span>PROGRES</span><strong id="dragProgress">0 <small>/ --</small></strong></div><div><span>KECEPATAN</span><strong><b id="dragSpeed">0</b> <small id="dragSpeedUnit">KM/J</small></strong></div><div><span>JARAK</span><strong><b id="dragDistance">0</b> <small>M</small></strong></div></div>
+        </div>
+        <div class="drag-actions"><button class="button button-primary" id="startRun" type="button"><span class="button-icon">▶</span> MULAI</button><button class="button button-danger hidden" id="cancelRun" type="button">BATAL</button></div>
+        <div class="result-panel hidden" id="runResult" aria-live="polite"></div>
+        <p class="gps-warning" id="dragGpsWarning">Akurasi hasil bergantung pada sinyal GPS. Jalankan di area aman dan tertutup.</p>
+      </section>
+
+      <section class="view" id="view-history" data-view="history" aria-labelledby="historyTitle">
+        <div class="view-heading"><div><p class="eyebrow">RUN ARCHIVE <span>03 / 04</span></p><h1 id="historyTitle">Riwayat</h1></div><button class="text-button" id="clearHistory" type="button">HAPUS SEMUA</button></div>
+        <div class="history-summary" id="historySummary"></div>
+        <div class="history-list" id="historyList"></div>
+        <div class="empty-state hidden" id="historyEmpty"><div class="empty-gauge">◌</div><h2>Belum ada hasil</h2><p>Hasil uji yang tersimpan akan muncul di sini.</p><button class="text-button" data-go="drag" type="button">MULAI UJI PERTAMA →</button></div>
+      </section>
+
+      <section class="view" id="view-settings" data-view="settings" aria-labelledby="settingsTitle">
+        <div class="view-heading"><div><p class="eyebrow">GARAGE & SYSTEM <span>04 / 04</span></p><h1>Setelan</h1></div></div>
+        <div class="settings-block"><div class="section-title"><div><span class="section-kicker">01 / GARASI</span><h2>Profil Motor</h2></div><button class="add-button" id="addBike" type="button" aria-label="Tambah motor">+</button></div><div id="bikeList" class="settings-list"></div></div>
+        <div class="settings-block"><div class="section-title"><div><span class="section-kicker">02 / DISTANCE & SPEED</span><h2>Template Uji</h2></div><button class="add-button" id="addTemplate" type="button" aria-label="Tambah template">+</button></div><div id="templateList" class="settings-list"></div></div>
+        <div class="settings-block unit-block"><div><span class="section-kicker">03 / PREFERENSI</span><h2>Satuan Kecepatan</h2></div><div class="segmented-control" role="group" aria-label="Satuan kecepatan"><button type="button" data-unit="kmh">KM/J</button><button type="button" data-unit="mph">MPH</button></div></div>
+        <div class="settings-footer"><button class="text-button" id="accountAction" type="button">MASUK DENGAN GOOGLE</button><span>RACEBOX GPS TELEMETRY · V1.0</span></div>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Navigasi utama">
+      <button class="nav-item active" type="button" data-route="speedo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17a8 8 0 1 1 16 0M12 13l4-4M6 17h12"/></svg><span>Speedo</span></button>
+      <button class="nav-item" type="button" data-route="drag"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18V6m4 12V4m4 14V9m4 9V6m4 12V3"/></svg><span>Drag</span></button>
+      <button class="nav-item" type="button" data-route="history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v15H4zM8 3v4m8-4v4M8 11h8m-8 4h5"/></svg><span>Riwayat</span></button>
+      <button class="nav-item" type="button" data-route="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM4.9 19.1l1.4-1.4m11.4 1.4-1.4-1.4M3 12h2m14 0h2M4.9 4.9l1.4 1.4m11.4-1.4-1.4 1.4M12 3v2m0 14v2"/></svg><span>Setelan</span></button>
+    </nav>
+  </div>
+
+  <div class="modal-backdrop hidden" id="modalBackdrop"><section class="bottom-sheet" id="modalSheet" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="sheet-handle"></div><div class="sheet-heading"><div><span class="section-kicker" id="modalKicker">RACEBOX</span><h2 id="modalTitle">Detail</h2></div><button class="icon-button close-modal" type="button" aria-label="Tutup">×</button></div><div id="modalContent"></div></section></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
