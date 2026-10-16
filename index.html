@@ -68,7 +68,7 @@
         </div>
         <div class="drag-actions"><button class="button button-primary" id="startRun" type="button"><span class="button-icon">▶</span> SIAP</button><button class="button button-danger hidden" id="cancelRun" type="button">BATAL</button></div>
         <div class="result-panel hidden" id="runResult" aria-live="polite"></div>
-        <p class="gps-warning" id="dragGpsWarning">Akurasi hasil bergantung pada sinyal GPS. Jalankan di area aman dan tertutup.</p>
+        <p class="gps-warning" id="dragGpsWarning">Tunggu GPS terkunci (akurasi 10 m atau lebih baik), pasang HP kuat di dudukan, jangan di saku.</p>
       </section>
 
       <section class="view" id="view-history" data-view="history" aria-labelledby="historyTitle">
@@ -83,6 +83,7 @@
         <div class="settings-block"><div class="section-title"><div><span class="section-kicker">01 / GARASI</span><h2>Profil Motor</h2></div><button class="add-button" id="addBike" type="button" aria-label="Tambah motor">+</button></div><div id="bikeList" class="settings-list"></div></div>
         <div class="settings-block"><div class="section-title"><div><span class="section-kicker">02 / DISTANCE & SPEED</span><h2>Template Uji</h2></div><button class="add-button" id="addTemplate" type="button" aria-label="Tambah template">+</button></div><div id="templateList" class="settings-list"></div></div>
         <div class="settings-block unit-block"><div><span class="section-kicker">03 / PREFERENSI</span><h2>Satuan Kecepatan</h2></div><div class="segmented-control" role="group" aria-label="Satuan kecepatan"><button type="button" data-unit="kmh">KM/J</button><button type="button" data-unit="mph">MPH</button></div></div>
+        <div class="settings-block motion-setting"><label class="motion-toggle" for="useMotionSensor"><span><span class="section-kicker">04 / EKSPERIMENTAL</span><strong>Gunakan sensor gerak</strong><small>Isi celah antar-fix GPS menggunakan akselerometer.</small></span><input id="useMotionSensor" type="checkbox" checked></label></div>
         <div class="settings-footer"><button class="text-button" id="accountAction" type="button">MASUK DENGAN GOOGLE</button><span>RACEBOX GPS TELEMETRY · V1.0</span></div>
       </section>
     </main>

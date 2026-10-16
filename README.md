@@ -22,6 +22,8 @@ Buka `http://localhost:8000`. Berikan izin lokasi dan uji di area terbuka. Untuk
 
 SDK Firebase v10.12.0 dimuat dari CDN ketika pengguna memilih Google login. Tanpa konfigurasi, tombol Google memberi pesan penyiapan dan mode tamu tetap dapat digunakan. Data profil motor, template, riwayat, preferensi, serta sesi pengguna disimpan di localStorage perangkat.
 
+Drag Meter mengutamakan kecepatan Doppler dari GPS, memfilter fix yang tidak akurat, dan dapat memakai sensor gerak untuk deteksi start serta estimasi eksperimental antar-fix (dapat dimatikan di Setelan). Percobaan yang selesai menyimpan ringkasan GPS dan sampel sensor di localStorage; log CSV dapat diunduh dari Riwayat.
+
 ## Install sebagai PWA
 
 Deploy melalui HTTPS (GitHub Pages sudah menyediakan HTTPS), buka situs di browser ponsel, lalu gunakan **Tambahkan ke layar utama / Install app** dari menu browser. Pada iOS, gunakan **Bagikan > Tambahkan ke Layar Utama**. Geolocation memerlukan izin browser dan koneksi HTTPS atau localhost.

@@ -1,4 +1,4 @@
-import { addResult, getData } from "./storage.js";
+import { addResult, getData, saveAttemptLog } from "./storage.js";
 
 const toRad = (degrees) => degrees * Math.PI / 180;
 
@@ -9,6 +9,20 @@ function haversine(first, second) {
   const value = Math.sin(latitude / 2) ** 2
     + Math.cos(toRad(first.latitude)) * Math.cos(toRad(second.latitude)) * Math.sin(longitude / 2) ** 2;
   return radius * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
+}
+
+function interpolateFix(first, second, fraction, timestamp) {
+  return {
+    latitude: first.latitude + (second.latitude - first.latitude) * fraction,
+    longitude: first.longitude + (second.longitude - first.longitude) * fraction,
+    timestamp,
+    speed: first.speed + (second.speed - first.speed) * fraction,
+    accuracy: first.accuracy + (second.accuracy - first.accuracy) * fraction
+  };
+}
+
+function eventEpoch(event) {
+  return event.timeStamp > 1e12 ? event.timeStamp : performance.timeOrigin + event.timeStamp;
 }
 
 export function initDragMeter(showToast, getGpsState) {
@@ -28,15 +42,33 @@ export function initDragMeter(showToast, getGpsState) {
   let mode = "idle";
   let selectedTemplate = null;
   let latestFix = null;
+  let lastFixSpeed = null;
+  let gpsFixes = [];
   let stationaryFix = null;
   let previousFix = null;
   let startTimestamp = 0;
+  let startSource = "GPS";
   let runDistance = 0;
   let previousProgress = 0;
   let previousSpeed = 0;
   let maximum = 0;
   let stoppedSince = null;
+  let latestMeasurementTimestamp = null;
   let frame = null;
+  let wakeLock = null;
+  let attemptLog = [];
+  let motionEnabled = false;
+  let gpsOnly = false;
+  let calibrationStartedAt = null;
+  let calibrationSamples = [];
+  let sensorBias = null;
+  let consecutiveMotionSamples = 0;
+  let sensorLastTimestamp = null;
+  let sensorEstimatedSpeed = 0;
+  let sensorSegmentDistance = 0;
+  let sensorSegmentHasSamples = false;
+  let runAccuracies = [];
+  let calibrationTimeout = null;
 
   function defaultTemplate(templates) {
     return templates.find((item) => item.id === "builtin-201m")
@@ -55,6 +87,7 @@ export function initDragMeter(showToast, getGpsState) {
       : primary?.id || "";
     bikeSelect.innerHTML = `<option value="">Pilih motor (opsional)</option>${bikes.map((bike) => `<option value="${bike.id}">${bike.name}${bike.cc ? ` · ${bike.cc} cc` : ""}</option>`).join("")}`;
     document.getElementById("dragSpeedUnit").textContent = unit === "mph" ? "MPH" : "KM/J";
+    if (lastFixSpeed !== null) updateSpeed(lastFixSpeed);
     updateProgress();
   }
 
@@ -97,12 +130,9 @@ export function initDragMeter(showToast, getGpsState) {
   }
 
   function updateTimer() {
-    if (mode !== "running") return;
-    const elapsed = Math.max(0, (Date.now() - startTimestamp) / 1000);
+    if (mode !== "running" || latestMeasurementTimestamp === null) return;
+    const elapsed = Math.max(0, (latestMeasurementTimestamp - startTimestamp) / 1000);
     timeNode.innerHTML = `${elapsed.toFixed(2)}<span> s</span>`;
-    if (stoppedSince !== null && Date.now() - stoppedSince > 3000) {
-      cancel(true);
-    }
   }
 
   function setAttemptControls(active) {
@@ -112,40 +142,70 @@ export function initDragMeter(showToast, getGpsState) {
     bikeSelect.disabled = active;
   }
 
-  function beginRun(firstMovingFix) {
-    if (!stationaryFix) return;
-    mode = "running";
-    startTimestamp = (stationaryFix.timestamp + firstMovingFix.timestamp) / 2;
-    previousFix = stationaryFix;
-    previousProgress = 0;
-    previousSpeed = stationaryFix.speed;
-    runDistance = 0;
-    maximum = 0;
-    stoppedSince = null;
-    statusNode.textContent = "OTOMATIS MULAI";
-    updateTimer();
-    advanceRun(firstMovingFix);
+  function logGps(rawPosition, accepted, reason = "") {
+    if (mode === "idle" || !rawPosition) return;
+    attemptLog.push({
+      timestamp: rawPosition.timestamp,
+      type: "gps",
+      latitude: rawPosition.latitude,
+      longitude: rawPosition.longitude,
+      speed: rawPosition.speed,
+      accuracy: rawPosition.accuracy,
+      sensorSamples: "",
+      valid: accepted,
+      reason
+    });
   }
 
-  function finish(seconds, finalSpeed, distance) {
+  function releaseWakeLock() {
+    if (!wakeLock) return;
+    const heldLock = wakeLock;
+    wakeLock = null;
+    heldLock.release().catch((error) => console.warn("Wake Lock gagal dilepas:", error));
+  }
+
+  function removeMotionListener() {
+    window.removeEventListener("devicemotion", handleMotion);
+    window.clearTimeout(calibrationTimeout);
+    calibrationTimeout = null;
+    motionEnabled = false;
+  }
+
+  function finish(seconds, finalSpeed, distance, finishTimestamp) {
     if (mode !== "running") return;
     mode = "idle";
     window.clearInterval(frame);
     frame = null;
+    removeMotionListener();
+    releaseWakeLock();
     statusNode.textContent = "RUN SELESAI";
     timeNode.innerHTML = `${seconds.toFixed(2)}<span> s</span>`;
     const { bikes, unit } = getData();
     const factor = unit === "mph" ? 0.621371 : 1;
     const bikeName = bikes.find((bike) => bike.id === bikeSelect.value)?.name || "Motor tidak dipilih";
+    const averageAccuracy = runAccuracies.length
+      ? runAccuracies.reduce((sum, value) => sum + value, 0) / runAccuracies.length
+      : null;
     const result = addResult({
       templateName: selectedTemplate.name,
       bikeName,
       time: seconds,
       finalSpeed,
       maxSpeed: Math.max(maximum, finalSpeed),
-      distance
+      distance,
+      averageAccuracy,
+      startSource,
+      startTimestamp,
+      finishTimestamp
     });
-    resultPanel.innerHTML = `<div class="result-stamp">RUN TEREKAM</div><strong>${seconds.toFixed(2)}<small> s</small></strong><div class="result-detail"><span>KEC. AKHIR<strong>${(finalSpeed * factor).toFixed(0)} ${unit === "mph" ? "MPH" : "KM/J"}</strong></span><span>KEC. MAKS<strong>${(Math.max(maximum, finalSpeed) * factor).toFixed(0)} ${unit === "mph" ? "MPH" : "KM/J"}</strong></span><span>JARAK<strong>${distance.toFixed(0)} m</strong></span></div>`;
+    try {
+      saveAttemptLog(result.id, attemptLog);
+    } catch (error) {
+      console.error("Log percobaan gagal disimpan:", error);
+      showToast("Hasil tersimpan, tetapi log CSV gagal disimpan karena ruang penyimpanan.");
+    }
+    const accuracyText = averageAccuracy === null ? "--" : `±${averageAccuracy.toFixed(1)} m`;
+    resultPanel.innerHTML = `<div class="result-stamp">RUN TEREKAM</div><strong>${seconds.toFixed(2)}<small> s</small></strong><div class="result-detail"><span>KEC. AKHIR<strong>${(finalSpeed * factor).toFixed(0)} ${unit === "mph" ? "MPH" : "KM/J"}</strong></span><span>KEC. MAKS<strong>${(Math.max(maximum, finalSpeed) * factor).toFixed(0)} ${unit === "mph" ? "MPH" : "KM/J"}</strong></span><span>JARAK<strong>${distance.toFixed(0)} m</strong></span><span>AKURASI GPS<strong>${accuracyText}</strong></span><span>WAKTU MULAI<strong>${startSource}</strong></span></div>`;
     resultPanel.classList.remove("hidden");
     setAttemptControls(false);
     startButton.innerHTML = `<span class="button-icon">↻</span> ULANGI`;
@@ -155,78 +215,229 @@ export function initDragMeter(showToast, getGpsState) {
 
   function advanceRun(fix) {
     if (!previousFix || fix.timestamp <= previousFix.timestamp) return;
-    const segment = haversine(previousFix, fix);
+    let segmentStart = previousFix;
+    if (startTimestamp > segmentStart.timestamp && startTimestamp < fix.timestamp) {
+      const fractionFromStart = (startTimestamp - segmentStart.timestamp) / (fix.timestamp - segmentStart.timestamp);
+      segmentStart = interpolateFix(segmentStart, fix, fractionFromStart, startTimestamp);
+    } else if (segmentStart.timestamp < startTimestamp && fix.timestamp <= startTimestamp) {
+      previousFix = fix;
+      return;
+    }
+    const gpsDistance = haversine(segmentStart, fix);
+    const hasSensorEstimate = getData().useMotionSensor !== false && sensorSegmentHasSamples;
+    const segment = hasSensorEstimate ? gpsDistance * 0.8 + sensorSegmentDistance * 0.2 : gpsDistance;
+    const correctedSpeed = hasSensorEstimate
+      ? fix.speed * 0.8 + sensorEstimatedSpeed * 3.6 * 0.2
+      : fix.speed;
     const nextDistance = runDistance + segment;
-    const progress = selectedTemplate.type === "distance" ? nextDistance : fix.speed;
+    const progress = selectedTemplate.type === "distance" ? nextDistance : correctedSpeed;
     const crossed = progress >= selectedTemplate.target;
     const fraction = crossed && progress > previousProgress
       ? Math.min(1, Math.max(0, (selectedTemplate.target - previousProgress) / (progress - previousProgress)))
       : 1;
     const measuredDistance = runDistance + segment * fraction;
-    const eventTime = previousFix.timestamp + (fix.timestamp - previousFix.timestamp) * fraction;
-    const finishSpeed = previousSpeed + (fix.speed - previousSpeed) * fraction;
+    const eventTime = segmentStart.timestamp + (fix.timestamp - segmentStart.timestamp) * fraction;
+    const finishSpeed = previousSpeed + (correctedSpeed - previousSpeed) * fraction;
 
     if (crossed) {
-      finish(Math.max(0, (eventTime - startTimestamp) / 1000), finishSpeed, measuredDistance);
+      runAccuracies.push(fix.accuracy);
+      finish(Math.max(0, (eventTime - startTimestamp) / 1000), finishSpeed, measuredDistance, eventTime);
       return;
     }
 
     runDistance = nextDistance;
     previousProgress = progress;
-    previousSpeed = fix.speed;
+    previousSpeed = correctedSpeed;
     previousFix = fix;
-    maximum = Math.max(maximum, fix.speed);
+    maximum = Math.max(maximum, correctedSpeed);
+    runAccuracies.push(fix.accuracy);
     showDistanceProgress(progress, runDistance);
-    updateSpeed(fix.speed);
+    updateSpeed(correctedSpeed);
+    sensorSegmentDistance = 0;
+    sensorSegmentHasSamples = false;
+    sensorEstimatedSpeed = fix.speed / 3.6;
+    sensorLastTimestamp = fix.timestamp;
+    latestMeasurementTimestamp = fix.timestamp;
 
     if (fix.speed < 2) {
-      if (stoppedSince === null) stoppedSince = Date.now();
+      if (stoppedSince === null) stoppedSince = fix.timestamp;
+      if (fix.timestamp - stoppedSince > 3000) cancel(true);
     } else {
       stoppedSince = null;
     }
   }
 
-  function handleGps(event) {
-    const { accuracy, fixSpeed, position } = event.detail;
-    if (!position || !Number.isFinite(position.latitude) || !Number.isFinite(position.longitude)
-      || !Number.isFinite(position.timestamp)) {
-      latestFix = null;
-      return;
-    }
-
-    const speed = Number.isFinite(fixSpeed) && fixSpeed >= 0 ? fixSpeed : null;
-    latestFix = { ...position, accuracy, speed };
-    if (!Number.isFinite(accuracy) || accuracy > 20) return;
-    if (speed !== null) updateSpeed(speed);
-
-    if (mode === "waiting") {
-      if (speed !== null && speed < 2) stationaryFix = latestFix;
-      if (speed !== null && speed > 3 && stationaryFix) beginRun(latestFix);
-      return;
-    }
-
-    if (mode !== "running" || speed === null) return;
-    advanceRun(latestFix);
+  function beginRun(timestamp, source) {
+    if (mode !== "ready" || !latestFix) return;
+    const anchor = [...gpsFixes].reverse().find((fix) => fix.timestamp <= timestamp) || latestFix;
+    mode = "running";
+    startTimestamp = timestamp;
+    startSource = source;
+    previousFix = anchor;
+    previousSpeed = source === "GPS" ? 3 : anchor.speed || 0;
+    previousProgress = selectedTemplate.type === "speed" ? previousSpeed : 0;
+    runDistance = 0;
+    maximum = 0;
+    stoppedSince = null;
+    sensorSegmentDistance = 0;
+    sensorSegmentHasSamples = false;
+    sensorEstimatedSpeed = (anchor.speed || 0) / 3.6;
+    sensorLastTimestamp = timestamp;
+    runAccuracies = [anchor.accuracy];
+    latestMeasurementTimestamp = timestamp;
+    statusNode.textContent = `OTOMATIS MULAI · ${source}`;
+    updateTimer();
   }
 
-  function begin() {
-    if (mode !== "idle") return;
-    const fix = latestFix;
-    const now = Date.now();
-    const gpsState = getGpsState();
-    if (!fix || !Number.isFinite(fix.speed) || now - fix.timestamp > 5000
-      || fix.accuracy > 15 || fix.speed >= 2 || gpsState.status === "denied") {
-      showToast("Tunggu GPS terkunci dan motor diam");
+  function handleGps(event) {
+    const { accuracy, fixSpeed, position, accepted, rawPosition, reason } = event.detail;
+    logGps(rawPosition, accepted, reason);
+    if (!accepted || !position || !Number.isFinite(position.latitude) || !Number.isFinite(position.longitude)
+      || !Number.isFinite(position.timestamp)) return;
+
+    const speed = Number.isFinite(fixSpeed) && fixSpeed >= 0 ? fixSpeed : null;
+    if (speed === null) return;
+    const fix = { ...position, accuracy, speed };
+    const precedingFix = latestFix;
+    latestFix = fix;
+    lastFixSpeed = speed;
+    latestMeasurementTimestamp = fix.timestamp;
+    if (mode !== "running") updateSpeed(speed);
+    gpsFixes.push(fix);
+    if (gpsFixes.length > 8) gpsFixes.shift();
+
+    if (mode === "ready" && gpsOnly && precedingFix && precedingFix.speed < 3 && speed >= 3) {
+      const fraction = (3 - precedingFix.speed) / (speed - precedingFix.speed);
+      const startTime = precedingFix.timestamp + (fix.timestamp - precedingFix.timestamp) * fraction;
+      stationaryFix = precedingFix;
+      beginRun(startTime, "GPS");
+      advanceRun(fix);
+      return;
+    }
+    if (mode === "running") advanceRun(fix);
+  }
+
+  function horizontalAcceleration(event) {
+    const acceleration = event.acceleration || event.accelerationIncludingGravity;
+    if (!acceleration || !Number.isFinite(acceleration.x) || !Number.isFinite(acceleration.y)) return null;
+    return { x: acceleration.x, y: acceleration.y, z: Number.isFinite(acceleration.z) ? acceleration.z : 0 };
+  }
+
+  function handleMotion(event) {
+    const timestamp = eventEpoch(event);
+    const raw = horizontalAcceleration(event);
+    if (!raw) return;
+    if (mode !== "idle") {
+      attemptLog.push({
+        timestamp,
+        type: "sensor",
+        latitude: "",
+        longitude: "",
+        speed: "",
+        accuracy: "",
+        sensorSamples: `${raw.x.toFixed(3)},${raw.y.toFixed(3)},${raw.z.toFixed(3)}`,
+        valid: true,
+        reason: ""
+      });
+    }
+
+    if (mode === "ready" && !gpsOnly && sensorBias === null) {
+      if (calibrationStartedAt === null) calibrationStartedAt = timestamp;
+      if (timestamp - calibrationStartedAt < 1000) {
+        calibrationSamples.push(raw);
+        statusNode.textContent = "KALIBRASI SENSOR · MOTOR DIAM";
+        return;
+      }
+      if (calibrationSamples.length < 3) return;
+      sensorBias = calibrationSamples.reduce((sum, sample) => ({
+        x: sum.x + sample.x / calibrationSamples.length,
+        y: sum.y + sample.y / calibrationSamples.length,
+        z: sum.z + sample.z / calibrationSamples.length
+      }), { x: 0, y: 0, z: 0 });
+      calibrationSamples = [];
+      statusNode.textContent = "SENSOR AKTIF · TUNGGU GERAK";
+    }
+    if (mode === "ready" && !gpsOnly && sensorBias !== null) {
+      const horizontal = Math.hypot(raw.x - sensorBias.x, raw.y - sensorBias.y);
+      consecutiveMotionSamples = horizontal > 0.8 ? consecutiveMotionSamples + 1 : 0;
+      if (consecutiveMotionSamples >= 3) beginRun(timestamp, "sensor");
       return;
     }
 
+    if (mode !== "running" || sensorBias === null || getData().useMotionSensor === false) return;
+    const elapsed = sensorLastTimestamp === null ? 0 : (timestamp - sensorLastTimestamp) / 1000;
+    if (elapsed <= 0 || elapsed > 0.5) {
+      sensorLastTimestamp = timestamp;
+      return;
+    }
+    const acceleration = Math.hypot(raw.x - sensorBias.x, raw.y - sensorBias.y);
+    sensorSegmentDistance += sensorEstimatedSpeed * elapsed + 0.5 * acceleration * elapsed * elapsed;
+    sensorEstimatedSpeed += acceleration * elapsed;
+    sensorSegmentHasSamples = true;
+    sensorLastTimestamp = timestamp;
+    latestMeasurementTimestamp = timestamp;
+    updateSpeed(sensorEstimatedSpeed * 3.6);
+    showDistanceProgress(
+      selectedTemplate.type === "distance" ? runDistance + sensorSegmentDistance : sensorEstimatedSpeed * 3.6,
+      runDistance + sensorSegmentDistance
+    );
+  }
+
+  async function requestMotionPermission() {
+    if (getData().useMotionSensor === false || !("DeviceMotionEvent" in window)) return false;
+    const motion = window.DeviceMotionEvent;
+    if (typeof motion.requestPermission === "function") {
+      try {
+        if (await motion.requestPermission() !== "granted") {
+          showToast("Izin sensor gerak ditolak; menggunakan mode GPS saja.");
+          return false;
+        }
+      } catch (error) {
+        console.warn("Izin sensor gerak gagal diminta:", error);
+        showToast("Sensor gerak tidak diizinkan; menggunakan mode GPS saja.");
+        return false;
+      }
+    }
+    return true;
+  }
+
+  async function begin() {
+    if (mode !== "idle") return;
     selectedTemplate = getData().templates.find((template) => template.id === templateSelect.value);
     if (!selectedTemplate) {
       showToast("Tambahkan template uji terlebih dahulu.");
       return;
     }
-    updateProgress(0, 0);
-    mode = "waiting";
+
+    mode = "preparing";
+    attemptLog = [];
+    setAttemptControls(true);
+    const motionPermission = requestMotionPermission();
+    let wakeLockRequest = Promise.resolve(null);
+    try {
+      if (navigator.wakeLock) wakeLockRequest = navigator.wakeLock.request("screen");
+      wakeLock = await wakeLockRequest;
+    } catch (error) {
+      console.warn("Wake Lock tidak tersedia:", error);
+      showToast("Layar mungkin meredup; Wake Lock tidak tersedia.");
+    }
+    const hasMotion = await motionPermission;
+    if (mode !== "preparing") {
+      releaseWakeLock();
+      return;
+    }
+    const gpsState = getGpsState();
+    const fix = latestFix;
+    if (!fix || !Number.isFinite(fix.speed) || Date.now() - fix.timestamp > 5000
+      || fix.accuracy > 10 || fix.speed >= 2 || gpsState.status === "denied") {
+      mode = "idle";
+      setAttemptControls(false);
+      releaseWakeLock();
+      showToast("Tunggu GPS terkunci (akurasi 10 m atau lebih baik) dan motor diam.");
+      return;
+    }
+
+    mode = "ready";
     stationaryFix = fix;
     previousFix = null;
     startTimestamp = 0;
@@ -235,10 +446,29 @@ export function initDragMeter(showToast, getGpsState) {
     previousSpeed = 0;
     maximum = 0;
     stoppedSince = null;
+    gpsOnly = !hasMotion;
+    motionEnabled = hasMotion;
+    calibrationStartedAt = null;
+    calibrationSamples = [];
+    sensorBias = null;
+    consecutiveMotionSamples = 0;
+    runAccuracies = [];
     resultPanel.classList.add("hidden");
-    statusNode.textContent = "MENUNGGU MOTOR BERGERAK";
+    if (motionEnabled) {
+      window.addEventListener("devicemotion", handleMotion);
+      statusNode.textContent = "KALIBRASI SENSOR · MOTOR DIAM";
+      calibrationTimeout = window.setTimeout(() => {
+        if (mode !== "ready" || sensorBias !== null) return;
+        gpsOnly = true;
+        removeMotionListener();
+        statusNode.textContent = "MODE GPS SAJA · TUNGGU GERAK";
+        showToast("Sensor gerak tidak memberikan sampel; menggunakan mode GPS saja.");
+      }, 2200);
+    } else {
+      gpsOnly = true;
+      statusNode.textContent = "MODE GPS SAJA · TUNGGU GERAK";
+    }
     timeNode.innerHTML = `0.00<span> s</span>`;
-    setAttemptControls(true);
     frame = window.setInterval(updateTimer, 50);
   }
 
@@ -247,12 +477,14 @@ export function initDragMeter(showToast, getGpsState) {
     mode = "idle";
     window.clearInterval(frame);
     frame = null;
+    removeMotionListener();
+    releaseWakeLock();
     startTimestamp = 0;
     stoppedSince = null;
     setAttemptControls(false);
     timeNode.innerHTML = `0.00<span> s</span>`;
     updateProgress(0, 0);
-    statusNode.textContent = stopped ? "Percobaan dibatalkan, motor berhenti" : "UJI DIBATALKAN";
+    statusNode.textContent = stopped ? "PERCOBAAN DIBATALKAN · MOTOR BERHENTI" : "UJI DIBATALKAN";
     startButton.innerHTML = `<span class="button-icon">▶</span> SIAP`;
     if (stopped) showToast("Percobaan dibatalkan, motor berhenti");
     else showToast("Uji dibatalkan.");

@@ -1,13 +1,15 @@
-import { addTemplate, deleteBike, deleteTemplate, getData, saveBike, setUnit } from "./storage.js";
+import { addTemplate, deleteBike, deleteTemplate, getData, saveBike, setUnit, setUseMotionSensor } from "./storage.js";
 
 const escapeHtml = (value = "") => String(value).replace(/[&<>\"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[char]);
 
 export function initSettings(openModal, showToast, onChange) {
   function render() {
-    const { bikes, templates, unit } = getData();
+    const { bikes, templates, unit, useMotionSensor } = getData();
     document.getElementById("bikeList").innerHTML = bikes.length ? bikes.map((bike) => `<div class="setting-row"><button class="button setting-row-main edit-bike" data-id="${bike.id}" type="button"><strong>${escapeHtml(bike.name)}</strong><span>${escapeHtml([bike.brand, bike.cc ? `${bike.cc} cc` : "", bike.power ? `${bike.power} hp` : ""].filter(Boolean).join(" · ") || "Profil motor")}</span></button><button class="delete-button delete-bike" data-id="${bike.id}" type="button" aria-label="Hapus ${escapeHtml(bike.name)}">×</button></div>`).join("") : `<div class="settings-empty">Belum ada profil. Tambahkan motor untuk memilihnya saat uji.</div>`;
     document.getElementById("templateList").innerHTML = templates.map((template) => `<div class="setting-row"><div class="setting-row-main"><strong>${escapeHtml(template.name)}</strong><span>${template.type === "speed" ? `KECEPATAN · ${template.target} km/j` : `JARAK · ${template.target} m`}</span></div>${template.builtIn ? `<span class="stock-tag">BAWAAN</span>` : `<button class="delete-button delete-template" data-id="${template.id}" type="button" aria-label="Hapus ${escapeHtml(template.name)}">×</button>`}</div>`).join("");
     document.querySelectorAll("[data-unit]").forEach((button) => button.classList.toggle("selected", button.dataset.unit === unit));
+    const motionToggle = document.getElementById("useMotionSensor");
+    motionToggle.checked = useMotionSensor !== false;
   }
 
   function bikeForm(bike = {}) {
@@ -64,6 +66,10 @@ export function initSettings(openModal, showToast, onChange) {
     render();
     onChange();
   }));
+  document.getElementById("useMotionSensor").addEventListener("change", (event) => {
+    setUseMotionSensor(event.currentTarget.checked);
+    showToast(event.currentTarget.checked ? "Sensor gerak eksperimental diaktifkan." : "Sensor gerak dinonaktifkan.");
+  });
   render();
   return { render };
 }

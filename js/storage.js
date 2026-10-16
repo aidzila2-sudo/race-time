@@ -1,4 +1,5 @@
 const STORAGE_KEY = "racebox:data:v1";
+const ATTEMPT_LOG_PREFIX = "racebox:attempt-log:";
 const TEMPLATES_VERSION_KEY = "racebox_templates_version";
 const TEMPLATES_VERSION = "2";
 
@@ -16,7 +17,8 @@ const DEFAULT_DATA = {
   bikes: [],
   templates: DEFAULT_TEMPLATES,
   history: [],
-  unit: "kmh"
+  unit: "kmh",
+  useMotionSensor: true
 };
 
 function clone(value) {
@@ -115,12 +117,27 @@ export function addResult(result) {
   return next;
 }
 
+export function saveAttemptLog(resultId, log) {
+  localStorage.setItem(`${ATTEMPT_LOG_PREFIX}${resultId}`, JSON.stringify(log));
+}
+
+export function getAttemptLog(resultId) {
+  const saved = localStorage.getItem(`${ATTEMPT_LOG_PREFIX}${resultId}`);
+  return saved ? JSON.parse(saved) : [];
+}
+
 export function clearHistory() {
+  data.history.forEach((result) => localStorage.removeItem(`${ATTEMPT_LOG_PREFIX}${result.id}`));
   data.history = [];
   persist();
 }
 
 export function setUnit(unit) {
   data.unit = unit === "mph" ? "mph" : "kmh";
+  persist();
+}
+
+export function setUseMotionSensor(enabled) {
+  data.useMotionSensor = Boolean(enabled);
   persist();
 }
