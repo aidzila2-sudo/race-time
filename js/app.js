@@ -61,6 +61,7 @@ function initialize() {
   initRouter((route) => {
     if (route === "history") renderHistory();
     if (route === "settings") settings.render();
+    if (route === "drag") dragmeter.onOpen();
   });
   document.getElementById("accountAction").addEventListener("click", () => {
     if (getCurrentUser() && !getCurrentUser().guest) {

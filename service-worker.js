@@ -1,4 +1,4 @@
-const CACHE_NAME = "racebox-shell-v2";
+const CACHE_NAME = "racebox-cache-v3";
 const APP_SHELL = [
   "./",
   "./index.html",

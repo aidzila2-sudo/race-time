@@ -60,14 +60,13 @@
           <label class="field-label">TEMPLATE UJI<select id="dragTemplate"></select></label>
           <label class="field-label">MOTOR<select id="dragBike"></select></label>
         </div>
-        <div class="start-sequence" id="startSequence" aria-label="Lampu start"><span></span><span></span><span></span><span></span><span></span></div>
         <div class="drag-readout">
-          <div class="drag-status" id="dragStatus">SIAP UNTUK START</div>
+          <div class="drag-status" id="dragStatus">TEKAN SIAP UNTUK MEMULAI</div>
           <div class="drag-time" id="dragTime">0.00<span> s</span></div>
           <div class="drag-progress-track"><div id="dragProgressBar"></div></div>
-          <div class="drag-stats"><div><span>PROGRES</span><strong id="dragProgress">0 <small>/ --</small></strong></div><div><span>KECEPATAN</span><strong><b id="dragSpeed">0</b> <small id="dragSpeedUnit">KM/J</small></strong></div><div><span>JARAK</span><strong><b id="dragDistance">0</b> <small>M</small></strong></div></div>
+          <div class="drag-stats"><div><span id="dragProgressLabel">PROGRES</span><strong id="dragProgress">0 <small>/ --</small></strong></div><div><span>KECEPATAN</span><strong><b id="dragSpeed">0</b> <small id="dragSpeedUnit">KM/J</small></strong></div><div><span>JARAK</span><strong><b id="dragDistance">0</b> <small>M</small></strong></div></div>
         </div>
-        <div class="drag-actions"><button class="button button-primary" id="startRun" type="button"><span class="button-icon">▶</span> MULAI</button><button class="button button-danger hidden" id="cancelRun" type="button">BATAL</button></div>
+        <div class="drag-actions"><button class="button button-primary" id="startRun" type="button"><span class="button-icon">▶</span> SIAP</button><button class="button button-danger hidden" id="cancelRun" type="button">BATAL</button></div>
         <div class="result-panel hidden" id="runResult" aria-live="polite"></div>
         <p class="gps-warning" id="dragGpsWarning">Akurasi hasil bergantung pada sinyal GPS. Jalankan di area aman dan tertutup.</p>
       </section>

@@ -16,6 +16,7 @@ export function initSpeedometer(showToast) {
   progress.style.strokeDashoffset = `${circumference}`;
   let watchId = null;
   let priorPosition = null;
+  let priorAccuratePosition = null;
   let readings = [];
   let speed = 0;
   let maximum = 0;
@@ -58,11 +59,22 @@ export function initSpeedometer(showToast) {
   }
   function handlePosition(position) {
     const coords = position.coords;
+    let fixSpeed = Number.isFinite(coords.speed) && coords.speed >= 0 ? coords.speed * 3.6 : null;
+    if (coords.accuracy <= 20) {
+      if (priorAccuratePosition) {
+        const elapsed = (position.timestamp - priorAccuratePosition.timestamp) / 1000;
+        if (elapsed > 0 && elapsed < 30 && fixSpeed === null) {
+          fixSpeed = haversine(priorAccuratePosition, coords) / elapsed * 3.6;
+        }
+      }
+      priorAccuratePosition = { latitude: coords.latitude, longitude: coords.longitude, timestamp: position.timestamp };
+    }
     if (priorPosition) {
       const elapsed = (position.timestamp - priorPosition.timestamp) / 1000;
       if (elapsed > 0 && elapsed < 30) {
-        distance += haversine(priorPosition, coords);
-        const calculated = haversine(priorPosition, coords) / elapsed;
+        const segmentDistance = haversine(priorPosition, coords);
+        distance += segmentDistance;
+        const calculated = segmentDistance / elapsed;
         const metersPerSecond = Number.isFinite(coords.speed) && coords.speed >= 0 ? coords.speed : calculated;
         readings.push(metersPerSecond * 3.6);
         if (readings.length > 4) readings.shift();
@@ -77,7 +89,7 @@ export function initSpeedometer(showToast) {
     document.getElementById("gpsAccuracy").textContent = Math.round(coords.accuracy);
     setStatus(coords.accuracy <= 25 ? "locked" : "weak", coords.accuracy <= 25 ? "TERKUNCI" : "LEMAH", `GPS aktif · akurasi ±${Math.round(coords.accuracy)} meter.`);
     paint();
-    window.dispatchEvent(new CustomEvent("racebox:gps", { detail: { speed, maximum, distance, accuracy: coords.accuracy, position: priorPosition } }));
+    window.dispatchEvent(new CustomEvent("racebox:gps", { detail: { speed, fixSpeed, maximum, distance, accuracy: coords.accuracy, position: priorPosition } }));
   }
   function handleError(error) {
     const denied = error.code === error.PERMISSION_DENIED;
