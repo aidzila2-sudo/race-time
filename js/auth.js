@@ -38,6 +38,18 @@ export function continueAsGuest() {
   return user;
 }
 
-export function signOut() {
-  setUser(null);
+export async function signOut() {
+  const user = getCurrentUser();
+  try {
+    if (user && !user.guest && isFirebaseConfigured()) {
+      const [{ initializeApp, getApps }, authSdk] = await Promise.all([
+        import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js"),
+        import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js")
+      ]);
+      const app = getApps()[0] || initializeApp(firebaseConfig);
+      await authSdk.signOut(authSdk.getAuth(app));
+    }
+  } finally {
+    setUser(null);
+  }
 }

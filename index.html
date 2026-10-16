@@ -84,7 +84,14 @@
         <div class="settings-block"><div class="section-title"><div><span class="section-kicker">02 / DISTANCE & SPEED</span><h2>Template Uji</h2></div><button class="add-button" id="addTemplate" type="button" aria-label="Tambah template">+</button></div><div id="templateList" class="settings-list"></div></div>
         <div class="settings-block unit-block"><div><span class="section-kicker">03 / PREFERENSI</span><h2>Satuan Kecepatan</h2></div><div class="segmented-control" role="group" aria-label="Satuan kecepatan"><button type="button" data-unit="kmh">KM/J</button><button type="button" data-unit="mph">MPH</button></div></div>
         <div class="settings-block motion-setting"><label class="motion-toggle" for="useMotionSensor"><span><span class="section-kicker">04 / EKSPERIMENTAL</span><strong>Gunakan sensor gerak</strong><small>Isi celah antar-fix GPS menggunakan akselerometer.</small></span><input id="useMotionSensor" type="checkbox" checked></label></div>
-        <div class="settings-footer"><button class="text-button" id="accountAction" type="button">MASUK DENGAN GOOGLE</button><span>RACEBOX GPS TELEMETRY · V1.0</span></div>
+        <div class="settings-block account-block">
+          <div><span class="section-kicker">05 / AKUN</span><h2>Akun aktif</h2></div>
+          <div class="account-details"><strong id="accountName">Belum masuk</strong><span id="accountEmail"></span></div>
+          <button class="button button-secondary" id="accountAction" type="button">MASUK DENGAN GOOGLE</button>
+          <button class="text-button reset-data-button" id="resetAllData" type="button">HAPUS SEMUA DATA DI PERANGKAT INI</button>
+          <p class="privacy-note">Reset penuh menghapus motor, template, riwayat, dan pengaturan di perangkat ini.</p>
+        </div>
+        <div class="settings-footer"><span>RACEBOX GPS TELEMETRY · V1.0</span></div>
       </section>
     </main>
 

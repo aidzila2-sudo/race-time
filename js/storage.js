@@ -141,3 +141,13 @@ export function setUseMotionSensor(enabled) {
   data.useMotionSensor = Boolean(enabled);
   persist();
 }
+
+export function resetAllData() {
+  const appKeys = [STORAGE_KEY, TEMPLATES_VERSION_KEY];
+  Object.keys(localStorage).forEach((key) => {
+    if (key.startsWith(ATTEMPT_LOG_PREFIX)) appKeys.push(key);
+  });
+  appKeys.forEach((key) => localStorage.removeItem(key));
+  data = clone(DEFAULT_DATA);
+  persist();
+}

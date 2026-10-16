@@ -25,6 +25,7 @@ export function initSpeedometer(showToast) {
   let startedAt = null;
   let latestTimestamp = null;
   let status = "bad";
+  let tickTimer = null;
 
   const unitDetails = () => getData().unit === "mph" ? { factor: 0.621371, label: "MPH" } : { factor: 1, label: "KM/J" };
   const displaySpeed = (kmh) => kmh * unitDetails().factor;
@@ -119,7 +120,7 @@ export function initSpeedometer(showToast) {
     latestTimestamp = timestamp;
     if (startedAt === null) {
       startedAt = timestamp;
-      window.setInterval(tick, 1000);
+      if (tickTimer === null) tickTimer = window.setInterval(tick, 1000);
     }
     validFixes.push(timestamp);
     if (validFixes.length > 5) validFixes.shift();
@@ -153,12 +154,34 @@ export function initSpeedometer(showToast) {
     if (denied) showToast("Izin lokasi ditolak. Aktifkan izin GPS di browser.");
   }
   function start() {
+    if (watchId !== null) return;
     if (!navigator.geolocation) {
       setStatus("denied", "TIDAK TERSEDIA", "Browser ini tidak mendukung geolokasi.");
       return;
     }
-    if (watchId !== null) navigator.geolocation.clearWatch(watchId);
     watchId = navigator.geolocation.watchPosition(handlePosition, handleError, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+  }
+  function stop() {
+    if (watchId !== null) {
+      navigator.geolocation.clearWatch(watchId);
+      watchId = null;
+    }
+    if (tickTimer !== null) {
+      window.clearInterval(tickTimer);
+      tickTimer = null;
+    }
+    priorPosition = null;
+    latestObservedTimestamp = null;
+    latestTimestamp = null;
+    startedAt = null;
+    readings = [];
+    validFixes = [];
+    speed = 0;
+    maximum = 0;
+    distance = 0;
+    document.getElementById("sessionDuration").textContent = "00:00";
+    setStatus("bad", "MENUNGGU", "Pelacakan GPS dihentikan.");
+    paint();
   }
   function reset() {
     distance = 0;
@@ -173,6 +196,5 @@ export function initSpeedometer(showToast) {
   }
   document.getElementById("resetSession").addEventListener("click", reset);
   paint();
-  start();
-  return { getState: () => ({ speed, maximum, distance, status }), paint };
+  return { getState: () => ({ speed, maximum, distance, status }), paint, start, stop };
 }

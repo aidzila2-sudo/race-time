@@ -472,7 +472,7 @@ export function initDragMeter(showToast, getGpsState) {
     frame = window.setInterval(updateTimer, 50);
   }
 
-  function cancel(stopped = false) {
+  function cancel(stopped = false, silent = false) {
     if (mode === "idle") return;
     mode = "idle";
     window.clearInterval(frame);
@@ -486,8 +486,10 @@ export function initDragMeter(showToast, getGpsState) {
     updateProgress(0, 0);
     statusNode.textContent = stopped ? "PERCOBAAN DIBATALKAN · MOTOR BERHENTI" : "UJI DIBATALKAN";
     startButton.innerHTML = `<span class="button-icon">▶</span> SIAP`;
-    if (stopped) showToast("Percobaan dibatalkan, motor berhenti");
-    else showToast("Uji dibatalkan.");
+    if (!silent) {
+      if (stopped) showToast("Percobaan dibatalkan, motor berhenti");
+      else showToast("Uji dibatalkan.");
+    }
   }
 
   startButton.addEventListener("click", begin);
@@ -495,5 +497,13 @@ export function initDragMeter(showToast, getGpsState) {
   templateSelect.addEventListener("change", () => updateProgress());
   window.addEventListener("racebox:gps", handleGps);
   refreshChoices();
-  return { refreshChoices, onOpen: selectDefaultTemplate };
+  return {
+    refreshChoices,
+    onOpen: selectDefaultTemplate,
+    stop() {
+      cancel(false, true);
+      releaseWakeLock();
+      removeMotionListener();
+    }
+  };
 }
