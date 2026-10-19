@@ -16,7 +16,7 @@ export function initSpeedometer(showToast) {
   progress.style.strokeDashoffset = `${circumference}`;
   let watchId = null;
   let priorPosition = null;
-  let latestObservedTimestamp = null;
+  let latestObservedFixPerf = null;
   let readings = [];
   let validFixes = [];
   let speed = 0;
@@ -61,6 +61,9 @@ export function initSpeedometer(showToast) {
     window.dispatchEvent(new CustomEvent("racebox:gps", { detail: { ...detail, rawPosition } }));
   }
   function handlePosition(position) {
+    const arrivalPerf = performance.now();
+    const latency = Date.now() - position.timestamp;
+    const fixPerf = arrivalPerf - (latency >= 0 && latency <= 3000 ? latency : 300);
     const coords = position.coords || {};
     const rawPosition = {
       timestamp: position.timestamp,
@@ -70,24 +73,25 @@ export function initSpeedometer(showToast) {
       accuracy: coords.accuracy
     };
     const accuracy = coords.accuracy;
-    const timestamp = position.timestamp;
-    if (!Number.isFinite(timestamp) || (latestObservedTimestamp !== null && timestamp <= latestObservedTimestamp)) {
+    const timestamp = fixPerf;
+    const timing = { arrivalPerf, latency, fixPerf };
+    if (!Number.isFinite(position.timestamp) || (latestObservedFixPerf !== null && timestamp <= latestObservedFixPerf)) {
       setStatus("bad", "BURUK", "Fix GPS duplikat atau waktunya mundur; diabaikan.");
-      announce(rawPosition, { accepted: false, accuracy, reason: "timestamp" });
+      announce(rawPosition, { ...timing, accepted: false, accuracy, reason: "timestamp" });
       paint();
       return;
     }
-    latestObservedTimestamp = timestamp;
+    latestObservedFixPerf = timestamp;
     if (!Number.isFinite(accuracy) || accuracy > 20) {
       validFixes = [];
       setStatus("bad", "BURUK", `Akurasi GPS ±${Number.isFinite(accuracy) ? Math.round(accuracy) : "--"} meter; menunggu fix yang lebih baik.`);
-      announce(rawPosition, { accepted: false, accuracy, reason: "accuracy" });
+      announce(rawPosition, { ...timing, accepted: false, accuracy, reason: "accuracy" });
       paint();
       return;
     }
     if (!Number.isFinite(coords.latitude) || !Number.isFinite(coords.longitude)) {
       setStatus("bad", "BURUK", "Koordinat GPS tidak valid; fix diabaikan.");
-      announce(rawPosition, { accepted: false, accuracy, reason: "coordinates" });
+      announce(rawPosition, { ...timing, accepted: false, accuracy, reason: "coordinates" });
       paint();
       return;
     }
@@ -99,7 +103,7 @@ export function initSpeedometer(showToast) {
       segmentDistance = haversine(priorPosition, rawPosition);
       if (elapsed <= 0 || segmentDistance > 100 * elapsed) {
         setStatus("bad", "BURUK", "Loncatan lokasi tidak wajar; fix GPS diabaikan.");
-        announce(rawPosition, { accepted: false, accuracy, reason: "jump" });
+        announce(rawPosition, { ...timing, accepted: false, accuracy, reason: "jump" });
         paint();
         return;
       }
@@ -113,7 +117,9 @@ export function initSpeedometer(showToast) {
     const acceptedPosition = {
       latitude: coords.latitude,
       longitude: coords.longitude,
-      timestamp,
+      timestamp: fixPerf,
+      positionTimestamp: position.timestamp,
+      fixPerf,
       accuracy
     };
     priorPosition = acceptedPosition;
@@ -137,6 +143,7 @@ export function initSpeedometer(showToast) {
     document.getElementById("gpsAccuracy").textContent = Math.round(accuracy);
     paint();
     announce(rawPosition, {
+      ...timing,
       accepted: true,
       speed,
       fixSpeed,
@@ -171,7 +178,7 @@ export function initSpeedometer(showToast) {
       tickTimer = null;
     }
     priorPosition = null;
-    latestObservedTimestamp = null;
+    latestObservedFixPerf = null;
     latestTimestamp = null;
     startedAt = null;
     readings = [];

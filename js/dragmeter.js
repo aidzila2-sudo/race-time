@@ -21,10 +21,6 @@ function interpolateFix(first, second, fraction, timestamp) {
   };
 }
 
-function eventEpoch(event) {
-  return event.timeStamp > 1e12 ? event.timeStamp : performance.timeOrigin + event.timeStamp;
-}
-
 export function initDragMeter(showToast, getGpsState) {
   const templateSelect = document.getElementById("dragTemplate");
   const bikeSelect = document.getElementById("dragBike");
@@ -46,7 +42,7 @@ export function initDragMeter(showToast, getGpsState) {
   let gpsFixes = [];
   let stationaryFix = null;
   let previousFix = null;
-  let startTimestamp = 0;
+  let startPerf = 0;
   let startSource = "GPS";
   let runDistance = 0;
   let previousProgress = 0;
@@ -68,6 +64,8 @@ export function initDragMeter(showToast, getGpsState) {
   let sensorSegmentDistance = 0;
   let sensorSegmentHasSamples = false;
   let runAccuracies = [];
+  let gpsIntegralDistance = 0;
+  let integralPreviousFix = null;
   let calibrationTimeout = null;
 
   function defaultTemplate(templates) {
@@ -131,7 +129,12 @@ export function initDragMeter(showToast, getGpsState) {
 
   function updateTimer() {
     if (mode !== "running" || latestMeasurementTimestamp === null) return;
-    const elapsed = Math.max(0, (latestMeasurementTimestamp - startTimestamp) / 1000);
+    const nowPerf = performance.now();
+    const elapsed = Math.max(0, (nowPerf - startPerf) / 1000);
+    if (elapsed > 60) {
+      cancel(false, false, "Percobaan dibatalkan otomatis setelah 60 detik.");
+      return;
+    }
     timeNode.innerHTML = `${elapsed.toFixed(2)}<span> s</span>`;
   }
 
@@ -142,19 +145,28 @@ export function initDragMeter(showToast, getGpsState) {
     bikeSelect.disabled = active;
   }
 
-  function logGps(rawPosition, accepted, reason = "") {
-    if (mode === "idle" || !rawPosition) return;
-    attemptLog.push({
+  function logGps(rawPosition, accepted, reason = "", timing = {}, speed = null) {
+    if (mode === "idle" || !rawPosition) return null;
+    const item = {
       timestamp: rawPosition.timestamp,
+      positionTimestamp: rawPosition.timestamp,
+      arrivalPerf: timing.arrivalPerf,
+      latency: timing.latency,
+      fixPerf: timing.fixPerf,
+      cumulativeDistance: runDistance + sensorSegmentDistance,
+      speed,
       type: "gps",
       latitude: rawPosition.latitude,
       longitude: rawPosition.longitude,
-      speed: rawPosition.speed,
       accuracy: rawPosition.accuracy,
       sensorSamples: "",
       valid: accepted,
-      reason
-    });
+      reason,
+      startPerf: mode === "running" ? startPerf : "",
+      finishPerf: ""
+    };
+    attemptLog.push(item);
+    return item;
   }
 
   function releaseWakeLock() {
@@ -171,8 +183,9 @@ export function initDragMeter(showToast, getGpsState) {
     motionEnabled = false;
   }
 
-  function finish(seconds, finalSpeed, distance, finishTimestamp) {
+  function finish(seconds, finalSpeed, distance, finishPerf) {
     if (mode !== "running") return;
+    runDistance = distance;
     mode = "idle";
     window.clearInterval(frame);
     frame = null;
@@ -186,8 +199,51 @@ export function initDragMeter(showToast, getGpsState) {
     const averageAccuracy = runAccuracies.length
       ? runAccuracies.reduce((sum, value) => sum + value, 0) / runAccuracies.length
       : null;
+    const averageSpeed = distance / seconds * 3.6;
+    const isShortDistanceRun = selectedTemplate.type === "distance" && Number(selectedTemplate.target) <= 500;
+    const gpsIntegralAverageSpeed = gpsIntegralDistance / seconds * 3.6;
+    const durationFromGpsIntegral = gpsIntegralDistance > 0
+      ? distance / (gpsIntegralDistance / seconds)
+      : Infinity;
+    const integralDeviation = Math.abs(durationFromGpsIntegral - seconds) / seconds;
+    const invalidReason = seconds <= 0
+      ? "durasi tidak valid"
+      : (isShortDistanceRun && seconds > 60)
+        ? "durasi lebih dari 60 detik untuk target 500 m atau kurang"
+        : (averageSpeed > 400 || averageSpeed < 3)
+          ? "kecepatan rata-rata di luar rentang 3-400 km/j"
+          : (integralDeviation > 0.3)
+            ? "durasi menyimpang lebih dari 30% dari integral kecepatan GPS"
+            : "";
+    attemptLog.forEach((item) => {
+      if (item.type === "gps") {
+        item.startPerf = startPerf;
+        item.finishPerf = finishPerf;
+      }
+    });
+    console.info("RaceBox Drag Meter run", {
+      startPerf,
+      finishPerf,
+      seconds,
+      gpsIntegralDistance,
+      gpsIntegralAverageSpeed,
+      averageSpeed,
+      valid: !invalidReason,
+      reason: invalidReason
+    });
+    if (invalidReason) {
+      statusNode.textContent = "PERCOBAAN TIDAK VALID";
+      resultPanel.innerHTML = `<div class="result-stamp">PERCOBAAN TIDAK VALID</div><p>${invalidReason}</p>`;
+      resultPanel.classList.remove("hidden");
+      setAttemptControls(false);
+      startButton.innerHTML = `<span class="button-icon">↻</span> ULANGI`;
+      showToast("Percobaan tidak valid, coba ulang");
+      return;
+    }
     const result = addResult({
       templateName: selectedTemplate.name,
+      templateType: selectedTemplate.type,
+      target: Number(selectedTemplate.target),
       bikeName,
       time: seconds,
       finalSpeed,
@@ -195,8 +251,9 @@ export function initDragMeter(showToast, getGpsState) {
       distance,
       averageAccuracy,
       startSource,
-      startTimestamp,
-      finishTimestamp
+      startPerf,
+      finishPerf,
+      valid: true
     });
     try {
       saveAttemptLog(result.id, attemptLog);
@@ -216,10 +273,10 @@ export function initDragMeter(showToast, getGpsState) {
   function advanceRun(fix) {
     if (!previousFix || fix.timestamp <= previousFix.timestamp) return;
     let segmentStart = previousFix;
-    if (startTimestamp > segmentStart.timestamp && startTimestamp < fix.timestamp) {
-      const fractionFromStart = (startTimestamp - segmentStart.timestamp) / (fix.timestamp - segmentStart.timestamp);
-      segmentStart = interpolateFix(segmentStart, fix, fractionFromStart, startTimestamp);
-    } else if (segmentStart.timestamp < startTimestamp && fix.timestamp <= startTimestamp) {
+    if (startPerf > segmentStart.timestamp && startPerf < fix.timestamp) {
+      const fractionFromStart = (startPerf - segmentStart.timestamp) / (fix.timestamp - segmentStart.timestamp);
+      segmentStart = interpolateFix(segmentStart, fix, fractionFromStart, startPerf);
+    } else if (segmentStart.timestamp < startPerf && fix.timestamp <= startPerf) {
       previousFix = fix;
       return;
     }
@@ -238,10 +295,17 @@ export function initDragMeter(showToast, getGpsState) {
     const measuredDistance = runDistance + segment * fraction;
     const eventTime = segmentStart.timestamp + (fix.timestamp - segmentStart.timestamp) * fraction;
     const finishSpeed = previousSpeed + (correctedSpeed - previousSpeed) * fraction;
+    const integralEndFix = crossed
+      ? interpolateFix(segmentStart, fix, fraction, eventTime)
+      : fix;
+    if (!integralPreviousFix) integralPreviousFix = segmentStart;
+    const gpsIntervalSeconds = Math.max(0, (integralEndFix.timestamp - integralPreviousFix.timestamp) / 1000);
+    gpsIntegralDistance += (integralPreviousFix.speed + integralEndFix.speed) / 2 / 3.6 * gpsIntervalSeconds;
+    integralPreviousFix = integralEndFix;
 
     if (crossed) {
       runAccuracies.push(fix.accuracy);
-      finish(Math.max(0, (eventTime - startTimestamp) / 1000), finishSpeed, measuredDistance, eventTime);
+      finish(Math.max(0, (eventTime - startPerf) / 1000), finishSpeed, measuredDistance, eventTime);
       return;
     }
 
@@ -271,7 +335,7 @@ export function initDragMeter(showToast, getGpsState) {
     if (mode !== "ready" || !latestFix) return;
     const anchor = [...gpsFixes].reverse().find((fix) => fix.timestamp <= timestamp) || latestFix;
     mode = "running";
-    startTimestamp = timestamp;
+    startPerf = timestamp;
     startSource = source;
     previousFix = anchor;
     previousSpeed = source === "GPS" ? 3 : anchor.speed || 0;
@@ -281,6 +345,8 @@ export function initDragMeter(showToast, getGpsState) {
     stoppedSince = null;
     sensorSegmentDistance = 0;
     sensorSegmentHasSamples = false;
+    gpsIntegralDistance = 0;
+    integralPreviousFix = null;
     sensorEstimatedSpeed = (anchor.speed || 0) / 3.6;
     sensorLastTimestamp = timestamp;
     runAccuracies = [anchor.accuracy];
@@ -290,14 +356,26 @@ export function initDragMeter(showToast, getGpsState) {
   }
 
   function handleGps(event) {
-    const { accuracy, fixSpeed, position, accepted, rawPosition, reason } = event.detail;
-    logGps(rawPosition, accepted, reason);
+    const { accuracy, fixSpeed, position, accepted, rawPosition, reason, arrivalPerf, latency, fixPerf } = event.detail;
+    const timing = { arrivalPerf, latency, fixPerf };
+    const logItem = logGps(rawPosition, accepted, reason, timing,
+      Number.isFinite(fixSpeed) ? fixSpeed : Number.isFinite(rawPosition?.speed) ? rawPosition.speed * 3.6 : null);
     if (!accepted || !position || !Number.isFinite(position.latitude) || !Number.isFinite(position.longitude)
-      || !Number.isFinite(position.timestamp)) return;
+      || !Number.isFinite(fixPerf)) {
+      if (logItem) console.info("RaceBox Drag Meter GPS fix", { ...logItem });
+      return;
+    }
 
     const speed = Number.isFinite(fixSpeed) && fixSpeed >= 0 ? fixSpeed : null;
-    if (speed === null) return;
-    const fix = { ...position, accuracy, speed };
+    if (speed === null) {
+      if (logItem) {
+        logItem.valid = false;
+        logItem.reason = "speed";
+        console.info("RaceBox Drag Meter GPS fix", { ...logItem });
+      }
+      return;
+    }
+    const fix = { ...position, timestamp: fixPerf, accuracy, speed };
     const precedingFix = latestFix;
     latestFix = fix;
     lastFixSpeed = speed;
@@ -312,9 +390,14 @@ export function initDragMeter(showToast, getGpsState) {
       stationaryFix = precedingFix;
       beginRun(startTime, "GPS");
       advanceRun(fix);
-      return;
+    } else if (mode === "running") {
+      advanceRun(fix);
     }
-    if (mode === "running") advanceRun(fix);
+    if (logItem) {
+      logItem.cumulativeDistance = runDistance + sensorSegmentDistance;
+      logItem.startPerf = mode === "running" ? startPerf : logItem.startPerf;
+      console.info("RaceBox Drag Meter GPS fix", { ...logItem });
+    }
   }
 
   function horizontalAcceleration(event) {
@@ -324,7 +407,7 @@ export function initDragMeter(showToast, getGpsState) {
   }
 
   function handleMotion(event) {
-    const timestamp = eventEpoch(event);
+    const timestamp = performance.now();
     const raw = horizontalAcceleration(event);
     if (!raw) return;
     if (mode !== "idle") {
@@ -428,7 +511,7 @@ export function initDragMeter(showToast, getGpsState) {
     }
     const gpsState = getGpsState();
     const fix = latestFix;
-    if (!fix || !Number.isFinite(fix.speed) || Date.now() - fix.timestamp > 5000
+    if (!fix || !Number.isFinite(fix.speed) || performance.now() - fix.timestamp > 5000
       || fix.accuracy > 10 || fix.speed >= 2 || gpsState.status === "denied") {
       mode = "idle";
       setAttemptControls(false);
@@ -440,7 +523,7 @@ export function initDragMeter(showToast, getGpsState) {
     mode = "ready";
     stationaryFix = fix;
     previousFix = null;
-    startTimestamp = 0;
+    startPerf = 0;
     runDistance = 0;
     previousProgress = 0;
     previousSpeed = 0;
@@ -472,22 +555,24 @@ export function initDragMeter(showToast, getGpsState) {
     frame = window.setInterval(updateTimer, 50);
   }
 
-  function cancel(stopped = false, silent = false) {
+  function cancel(stopped = false, silent = false, message = "") {
     if (mode === "idle") return;
     mode = "idle";
     window.clearInterval(frame);
     frame = null;
     removeMotionListener();
     releaseWakeLock();
-    startTimestamp = 0;
+    startPerf = 0;
     stoppedSince = null;
     setAttemptControls(false);
     timeNode.innerHTML = `0.00<span> s</span>`;
     updateProgress(0, 0);
-    statusNode.textContent = stopped ? "PERCOBAAN DIBATALKAN · MOTOR BERHENTI" : "UJI DIBATALKAN";
+    statusNode.textContent = message ? "PERCOBAAN DIBATALKAN · BATAS WAKTU"
+      : stopped ? "PERCOBAAN DIBATALKAN · MOTOR BERHENTI" : "UJI DIBATALKAN";
     startButton.innerHTML = `<span class="button-icon">▶</span> SIAP`;
     if (!silent) {
-      if (stopped) showToast("Percobaan dibatalkan, motor berhenti");
+      if (message) showToast(message);
+      else if (stopped) showToast("Percobaan dibatalkan, motor berhenti");
       else showToast("Uji dibatalkan.");
     }
   }
