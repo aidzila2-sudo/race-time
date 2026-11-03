@@ -24,6 +24,8 @@ SDK Firebase v10.12.0 dimuat dari CDN ketika pengguna memilih Google login. Tanp
 
 Drag Meter mengutamakan kecepatan Doppler dari GPS, memfilter fix yang tidak akurat, dan dapat memakai sensor gerak untuk deteksi start serta estimasi eksperimental antar-fix (dapat dimatikan di Setelan). Waktu fix GPS dinormalisasi ke `performance.now()` untuk interpolasi dan pengukuran durasi. Percobaan yang selesai hanya disimpan jika lolos validasi waktu, kecepatan rata-rata, dan integral kecepatan GPS; percobaan yang tidak valid meminta pengulangan. Percobaan yang valid menyimpan ringkasan GPS dan sampel sensor di localStorage; log CSV mencakup timestamp GPS, waktu kedatangan, latensi, jarak kumulatif, kecepatan, dan waktu start/finish. Riwayat lama dengan durasi atau kecepatan yang tidak masuk akal ditandai sebagai data rusak dan tidak dihitung sebagai hasil valid.
 
+Drag History menyimpan split GPS yang diinterpolasi pada jarak konfigurasi (default 20, 100, 201, dan 203 m), kecepatan maksimum, motor, serta status rollout. Rollout 1 ft aktif secara default dan menggeser titik nol split sejauh 0,3048 m; estimasi ini terbatas oleh pembacaan GPS sekitar 1 Hz. Jarak split dapat diubah di Setelan hingga delapan titik, sementara riwayat dapat difilter menurut motor dan sesi/hari. CSV Drag History berisi semua split tersimpan.
+
 Status akun dan tombol **KELUAR** tersedia di Setelan. Keluar mempertahankan data lokal; opsi reset penuh menghapus data RaceBox di perangkat setelah dua konfirmasi. Saat online, service worker mengambil halaman dan berkas JavaScript/CSS terbaru dari jaringan terlebih dahulu, dengan cache sebagai fallback offline.
 
 ## Install sebagai PWA

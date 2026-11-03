@@ -1,4 +1,4 @@
-import { addResult, getData, saveAttemptLog } from "./storage.js";
+import { addResult, CURRENT_SESSION_ID, getData, saveAttemptLog, setActiveBike } from "./storage.js";
 
 const toRad = (degrees) => degrees * Math.PI / 180;
 
@@ -67,6 +67,53 @@ export function initDragMeter(showToast, getGpsState) {
   let gpsIntegralDistance = 0;
   let integralPreviousFix = null;
   let calibrationTimeout = null;
+  let splitFixes = [];
+  let runSplitDistances = [];
+  let runRolloutEnabled = true;
+
+  function appendSplitFix(fix) {
+    const previous = splitFixes[splitFixes.length - 1];
+    if (!previous) {
+      splitFixes.push({ ...fix, distance: 0 });
+      return;
+    }
+    if (fix.timestamp <= previous.timestamp) return;
+    splitFixes.push({
+      ...fix,
+      distance: previous.distance + haversine(previous, fix)
+    });
+  }
+
+  function pointAtDistance(target) {
+    if (!splitFixes.length || target < 0 || target > splitFixes[splitFixes.length - 1].distance) return null;
+    for (let index = 1; index < splitFixes.length; index += 1) {
+      const first = splitFixes[index - 1];
+      const second = splitFixes[index];
+      if (target > second.distance) continue;
+      const segmentDistance = second.distance - first.distance;
+      if (segmentDistance <= 0) continue;
+      const fraction = Math.min(1, Math.max(0, (target - first.distance) / segmentDistance));
+      return {
+        timestamp: first.timestamp + (second.timestamp - first.timestamp) * fraction,
+        speed: first.speed + (second.speed - first.speed) * fraction
+      };
+    }
+    return splitFixes[0].distance === target
+      ? { timestamp: splitFixes[0].timestamp, speed: splitFixes[0].speed }
+      : null;
+  }
+
+  function calculateSplits() {
+    const rolloutDistance = runRolloutEnabled ? 0.3048 : 0;
+    const rolloutPoint = pointAtDistance(rolloutDistance);
+    if (!rolloutPoint) return [];
+    return runSplitDistances.flatMap((distance) => {
+      const crossing = pointAtDistance(rolloutDistance + distance);
+      if (!crossing) return [];
+      const time = (crossing.timestamp - rolloutPoint.timestamp) / 1000;
+      return [{ distance, time, speed: crossing.speed }];
+    });
+  }
 
   function defaultTemplate(templates) {
     return templates.find((item) => item.id === "builtin-201m")
@@ -75,7 +122,7 @@ export function initDragMeter(showToast, getGpsState) {
   }
 
   function refreshChoices() {
-    const { templates, bikes, unit } = getData();
+    const { templates, bikes, unit, activeBikeId } = getData();
     const primary = defaultTemplate(templates);
     const orderedTemplates = primary ? [primary, ...templates.filter((item) => item !== primary)] : templates;
     const previousTemplate = templateSelect.value;
@@ -84,6 +131,7 @@ export function initDragMeter(showToast, getGpsState) {
       ? previousTemplate
       : primary?.id || "";
     bikeSelect.innerHTML = `<option value="">Pilih motor (opsional)</option>${bikes.map((bike) => `<option value="${bike.id}">${bike.name}${bike.cc ? ` · ${bike.cc} cc` : ""}</option>`).join("")}`;
+    bikeSelect.value = bikes.some((bike) => bike.id === activeBikeId) ? activeBikeId : "";
     document.getElementById("dragSpeedUnit").textContent = unit === "mph" ? "MPH" : "KM/J";
     if (lastFixSpeed !== null) updateSpeed(lastFixSpeed);
     updateProgress();
@@ -143,6 +191,7 @@ export function initDragMeter(showToast, getGpsState) {
     cancelButton.classList.toggle("hidden", !active);
     templateSelect.disabled = active;
     bikeSelect.disabled = active;
+    document.getElementById("dragRollout").disabled = active;
   }
 
   function logGps(rawPosition, accepted, reason = "", timing = {}, speed = null) {
@@ -200,7 +249,6 @@ export function initDragMeter(showToast, getGpsState) {
       ? runAccuracies.reduce((sum, value) => sum + value, 0) / runAccuracies.length
       : null;
     const averageSpeed = distance / seconds * 3.6;
-    const isShortDistanceRun = selectedTemplate.type === "distance" && Number(selectedTemplate.target) <= 500;
     const gpsIntegralAverageSpeed = gpsIntegralDistance / seconds * 3.6;
     const durationFromGpsIntegral = gpsIntegralDistance > 0
       ? distance / (gpsIntegralDistance / seconds)
@@ -208,8 +256,8 @@ export function initDragMeter(showToast, getGpsState) {
     const integralDeviation = Math.abs(durationFromGpsIntegral - seconds) / seconds;
     const invalidReason = seconds <= 0
       ? "durasi tidak valid"
-      : (isShortDistanceRun && seconds > 60)
-        ? "durasi lebih dari 60 detik untuk target 500 m atau kurang"
+      : seconds > 60
+        ? "durasi lebih dari 60 detik"
         : (averageSpeed > 400 || averageSpeed < 3)
           ? "kecepatan rata-rata di luar rentang 3-400 km/j"
           : (integralDeviation > 0.3)
@@ -240,11 +288,25 @@ export function initDragMeter(showToast, getGpsState) {
       showToast("Percobaan tidak valid, coba ulang");
       return;
     }
+    const dragSplits = calculateSplits();
+    if (dragSplits.some((split) => !Number.isFinite(split.time) || split.time <= 0
+      || split.time > 60 || !Number.isFinite(split.speed) || split.speed < 0 || split.speed > 400)) {
+      statusNode.textContent = "PERCOBAAN TIDAK VALID";
+      resultPanel.innerHTML = `<div class="result-stamp">PERCOBAAN TIDAK VALID</div><p>Waktu atau kecepatan split tidak masuk akal.</p>`;
+      resultPanel.classList.remove("hidden");
+      setAttemptControls(false);
+      startButton.innerHTML = `<span class="button-icon">↻</span> ULANGI`;
+      showToast("Percobaan tidak valid, coba ulang");
+      return;
+    }
+    const bike = bikes.find((item) => item.id === bikeSelect.value);
     const result = addResult({
+      dragRun: true,
       templateName: selectedTemplate.name,
       templateType: selectedTemplate.type,
       target: Number(selectedTemplate.target),
       bikeName,
+      bikeId: bike?.id || "",
       time: seconds,
       finalSpeed,
       maxSpeed: Math.max(maximum, finalSpeed),
@@ -253,6 +315,11 @@ export function initDragMeter(showToast, getGpsState) {
       startSource,
       startPerf,
       finishPerf,
+      dragSplits,
+      dragSplitDistances: [...runSplitDistances],
+      rolloutEnabled: runRolloutEnabled,
+      rolloutStatus: runRolloutEnabled ? "ON" : "OFF",
+      sessionId: CURRENT_SESSION_ID,
       valid: true
     });
     try {
@@ -295,6 +362,8 @@ export function initDragMeter(showToast, getGpsState) {
     const measuredDistance = runDistance + segment * fraction;
     const eventTime = segmentStart.timestamp + (fix.timestamp - segmentStart.timestamp) * fraction;
     const finishSpeed = previousSpeed + (correctedSpeed - previousSpeed) * fraction;
+    if (!splitFixes.length) appendSplitFix(segmentStart);
+    appendSplitFix(fix);
     const integralEndFix = crossed
       ? interpolateFix(segmentStart, fix, fraction, eventTime)
       : fix;
@@ -350,6 +419,7 @@ export function initDragMeter(showToast, getGpsState) {
     sensorEstimatedSpeed = (anchor.speed || 0) / 3.6;
     sensorLastTimestamp = timestamp;
     runAccuracies = [anchor.accuracy];
+    splitFixes = [];
     latestMeasurementTimestamp = timestamp;
     statusNode.textContent = `OTOMATIS MULAI · ${source}`;
     updateTimer();
@@ -521,6 +591,10 @@ export function initDragMeter(showToast, getGpsState) {
     }
 
     mode = "ready";
+    const runSettings = getData();
+    runSplitDistances = [...runSettings.splitDistances];
+    runRolloutEnabled = runSettings.oneFootRollout !== false;
+    document.getElementById("dragRollout").checked = runRolloutEnabled;
     stationaryFix = fix;
     previousFix = null;
     startPerf = 0;
@@ -580,6 +654,7 @@ export function initDragMeter(showToast, getGpsState) {
   startButton.addEventListener("click", begin);
   cancelButton.addEventListener("click", () => cancel());
   templateSelect.addEventListener("change", () => updateProgress());
+  bikeSelect.addEventListener("change", () => setActiveBike(bikeSelect.value));
   window.addEventListener("racebox:gps", handleGps);
   refreshChoices();
   return {

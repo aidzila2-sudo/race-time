@@ -67,15 +67,28 @@
           <div class="drag-stats"><div><span id="dragProgressLabel">PROGRES</span><strong id="dragProgress">0 <small>/ --</small></strong></div><div><span>KECEPATAN</span><strong><b id="dragSpeed">0</b> <small id="dragSpeedUnit">KM/J</small></strong></div><div><span>JARAK</span><strong><b id="dragDistance">0</b> <small>M</small></strong></div></div>
         </div>
         <div class="drag-actions"><button class="button button-primary" id="startRun" type="button"><span class="button-icon">▶</span> SIAP</button><button class="button button-danger hidden" id="cancelRun" type="button">BATAL</button></div>
+        <div class="drag-rollout-control"><label class="motion-toggle" for="dragRollout"><span><strong>1 ft rollout</strong><small>estimasi, GPS 1 Hz terbatas</small></span><input id="dragRollout" type="checkbox" checked></label></div>
         <div class="result-panel hidden" id="runResult" aria-live="polite"></div>
         <p class="gps-warning" id="dragGpsWarning">Tunggu GPS terkunci (akurasi 10 m atau lebih baik), pasang HP kuat di dudukan, jangan di saku.</p>
       </section>
 
       <section class="view" id="view-history" data-view="history" aria-labelledby="historyTitle">
-        <div class="view-heading"><div><p class="eyebrow">RUN ARCHIVE <span>03 / 04</span></p><h1 id="historyTitle">Riwayat</h1></div><button class="text-button" id="clearHistory" type="button">HAPUS SEMUA</button></div>
+        <div class="view-heading"><div><p class="eyebrow">RUN ARCHIVE <span>03 / 04</span></p><h1 id="historyTitle">Drag History</h1></div><span class="gps-history-indicator" id="historyGpsStatus" role="img" aria-label="GPS menunggu"><i></i></span></div>
+        <section class="drag-history-panel" aria-label="Drag History">
+          <div class="drag-history-meta"><time id="dragHistoryDate"></time><span id="dragHistoryRollout">1ft rollout: ON</span></div>
+          <label class="field-label">MOTOR<select id="historyBikeFilter"></select></label>
+          <div class="history-filter-row"><span>RENTANG</span><div class="segmented-control" role="group" aria-label="Rentang riwayat"><button type="button" data-history-range="session">Sesi ini</button><button type="button" data-history-range="today">Hari ini</button><button type="button" data-history-range="all">Semua</button></div></div>
+          <p class="best-results-label" id="bestResultsLabel">Best results of 0 runs:</p>
+          <div class="drag-split-table" id="bestSplitTable"></div>
+          <div class="drag-history-actions"><button class="button button-secondary" id="downloadDragCsv" type="button">Unduh CSV</button><button class="text-button" id="clearDragHistory" type="button">HAPUS SEMUA</button></div>
+          <div class="drag-runs-list" id="dragRunsList"></div>
+          <p class="rollout-note">1 ft rollout: estimasi, GPS 1 Hz terbatas</p>
+        </section>
+        <div class="settings-block legacy-history-block"><div class="section-title"><div><span class="section-kicker">ARSIP</span><h2>Riwayat Uji Lainnya</h2></div><button class="text-button" id="clearHistory" type="button">HAPUS</button></div>
         <div class="history-summary" id="historySummary"></div>
         <div class="history-list" id="historyList"></div>
         <div class="empty-state hidden" id="historyEmpty"><div class="empty-gauge">◌</div><h2>Belum ada hasil</h2><p>Hasil uji yang tersimpan akan muncul di sini.</p><button class="text-button" data-go="drag" type="button">MULAI UJI PERTAMA →</button></div>
+        </div>
       </section>
 
       <section class="view" id="view-settings" data-view="settings" aria-labelledby="settingsTitle">
@@ -84,8 +97,15 @@
         <div class="settings-block"><div class="section-title"><div><span class="section-kicker">02 / DISTANCE & SPEED</span><h2>Template Uji</h2></div><button class="add-button" id="addTemplate" type="button" aria-label="Tambah template">+</button></div><div id="templateList" class="settings-list"></div></div>
         <div class="settings-block unit-block"><div><span class="section-kicker">03 / PREFERENSI</span><h2>Satuan Kecepatan</h2></div><div class="segmented-control" role="group" aria-label="Satuan kecepatan"><button type="button" data-unit="kmh">KM/J</button><button type="button" data-unit="mph">MPH</button></div></div>
         <div class="settings-block motion-setting"><label class="motion-toggle" for="useMotionSensor"><span><span class="section-kicker">04 / EKSPERIMENTAL</span><strong>Gunakan sensor gerak</strong><small>Isi celah antar-fix GPS menggunakan akselerometer.</small></span><input id="useMotionSensor" type="checkbox" checked></label></div>
+        <div class="settings-block drag-settings-block"><div class="section-title"><div><span class="section-kicker">05 / DRAG TIMER</span><h2>Split & Rollout</h2></div></div>
+          <label class="motion-toggle" for="settingsRollout"><span><strong>1 ft rollout</strong><small>estimasi, GPS 1 Hz terbatas</small></span><input id="settingsRollout" type="checkbox" checked></label>
+          <div class="split-distance-heading"><strong>Jarak split (m)</strong><span id="splitDistanceCount">0 / 8</span></div>
+          <div id="splitDistanceList" class="settings-list"></div>
+          <div class="split-distance-add"><input id="customSplitDistance" type="number" min="1" step="1" inputmode="numeric" placeholder="Jarak baru (m)" aria-label="Jarak split baru dalam meter"><button class="button button-secondary" id="addSplitDistance" type="button">TAMBAH</button></div>
+          <div class="split-quick-add" aria-label="Jarak cepat"><span>Tambah cepat:</span><button type="button" data-split-distance="18">18</button><button type="button" data-split-distance="21">21</button><button type="button" data-split-distance="60">60</button><button type="button" data-split-distance="101">101</button><button type="button" data-split-distance="250">250</button><button type="button" data-split-distance="402">402</button><button type="button" data-split-distance="500">500</button></div>
+        </div>
         <div class="settings-block account-block">
-          <div><span class="section-kicker">05 / AKUN</span><h2>Akun aktif</h2></div>
+          <div><span class="section-kicker">06 / AKUN</span><h2>Akun aktif</h2></div>
           <div class="account-details"><strong id="accountName">Belum masuk</strong><span id="accountEmail"></span></div>
           <button class="button button-secondary" id="accountAction" type="button">MASUK DENGAN GOOGLE</button>
           <button class="text-button reset-data-button" id="resetAllData" type="button">HAPUS SEMUA DATA DI PERANGKAT INI</button>
