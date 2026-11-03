@@ -1,4 +1,7 @@
-import { addResult, CURRENT_SESSION_ID, getData, saveAttemptLog, setActiveBike } from "./storage.js";
+import {
+  addDragResult, ensureDragSession, getData, getMotorNameSuggestions, saveAttemptLog,
+  setLastMotorName, startNewDragSession
+} from "./storage.js";
 
 const toRad = (degrees) => degrees * Math.PI / 180;
 
@@ -23,7 +26,7 @@ function interpolateFix(first, second, fraction, timestamp) {
 
 export function initDragMeter(showToast, getGpsState) {
   const templateSelect = document.getElementById("dragTemplate");
-  const bikeSelect = document.getElementById("dragBike");
+  const bikeNameInput = document.getElementById("dragBikeName");
   const startButton = document.getElementById("startRun");
   const cancelButton = document.getElementById("cancelRun");
   const statusNode = document.getElementById("dragStatus");
@@ -70,6 +73,25 @@ export function initDragMeter(showToast, getGpsState) {
   let splitFixes = [];
   let runSplitDistances = [];
   let runRolloutEnabled = true;
+  let runSessionId = "";
+
+  function matchingBike(name) {
+    const normalized = name.trim().toLocaleLowerCase();
+    return getData().bikes.find((bike) => bike.name.trim().toLocaleLowerCase() === normalized) || null;
+  }
+
+  function renderBikeSuggestions() {
+    const names = getMotorNameSuggestions();
+    document.getElementById("bikeNameSuggestions").innerHTML = names
+      .map((name) => `<option value="${name.replace(/[&<>\"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[char])}"></option>`)
+      .join("");
+  }
+
+  function normalizedBikeName() {
+    const name = bikeNameInput.value.trim().slice(0, 40);
+    bikeNameInput.value = name;
+    return name;
+  }
 
   function appendSplitFix(fix) {
     const previous = splitFixes[splitFixes.length - 1];
@@ -122,16 +144,18 @@ export function initDragMeter(showToast, getGpsState) {
   }
 
   function refreshChoices() {
-    const { templates, bikes, unit, activeBikeId } = getData();
+    const { templates, unit, lastMotorName } = getData();
     const primary = defaultTemplate(templates);
-    const orderedTemplates = primary ? [primary, ...templates.filter((item) => item !== primary)] : templates;
+    const distanceTemplates = templates.filter((item) => item.type === "distance" && Number(item.target) > 0);
+    const orderedTemplates = primary ? [primary, ...distanceTemplates.filter((item) => item !== primary)] : distanceTemplates;
     const previousTemplate = templateSelect.value;
     templateSelect.innerHTML = orderedTemplates.map((template) => `<option value="${template.id}">${template.name}</option>`).join("");
     templateSelect.value = orderedTemplates.some((item) => item.id === previousTemplate)
       ? previousTemplate
       : primary?.id || "";
-    bikeSelect.innerHTML = `<option value="">Pilih motor (opsional)</option>${bikes.map((bike) => `<option value="${bike.id}">${bike.name}${bike.cc ? ` · ${bike.cc} cc` : ""}</option>`).join("")}`;
-    bikeSelect.value = bikes.some((bike) => bike.id === activeBikeId) ? activeBikeId : "";
+    if (!bikeNameInput.value) bikeNameInput.value = lastMotorName || "";
+    renderBikeSuggestions();
+    if (lastMotorName) ensureDragSession(lastMotorName, matchingBike(lastMotorName));
     document.getElementById("dragSpeedUnit").textContent = unit === "mph" ? "MPH" : "KM/J";
     if (lastFixSpeed !== null) updateSpeed(lastFixSpeed);
     updateProgress();
@@ -148,13 +172,10 @@ export function initDragMeter(showToast, getGpsState) {
   function updateProgress(progress = 0, distance = 0) {
     const template = getData().templates.find((item) => item.id === templateSelect.value);
     if (!template || mode !== "idle") return;
-    const unit = getData().unit === "mph" ? "mph" : "km/j";
-    const amount = template.type === "speed" && getData().unit === "mph" ? progress * 0.621371 : progress;
-    const target = template.type === "speed" && getData().unit === "mph" ? template.target * 0.621371 : template.target;
-    progressNode.innerHTML = `${Math.round(amount)} <small>/ ${Math.round(target)} ${template.type === "speed" ? unit : "m"}</small>`;
+    progressNode.innerHTML = `${Math.round(progress)} <small>/ ${Math.round(template.target)} m</small>`;
     progressLabel.textContent = "PROGRES";
     distanceNode.textContent = distance.toFixed(0);
-    progressBar.style.width = `${template.type === "distance" ? Math.min(progress / template.target, 1) * 100 : 0}%`;
+    progressBar.style.width = `${Math.min(progress / template.target, 1) * 100}%`;
   }
 
   function displaySpeed(speed) {
@@ -166,10 +187,7 @@ export function initDragMeter(showToast, getGpsState) {
   }
 
   function showDistanceProgress(progress, distance) {
-    const unit = getData().unit === "mph" ? "mph" : "km/j";
-    const shownProgress = selectedTemplate.type === "speed" ? displaySpeed(progress) : progress;
-    const shownTarget = selectedTemplate.type === "speed" ? displaySpeed(selectedTemplate.target) : selectedTemplate.target;
-    progressNode.innerHTML = `${Math.ceil(Math.max(0, shownTarget - shownProgress))} <small>${selectedTemplate.type === "speed" ? unit : "m"} tersisa</small>`;
+    progressNode.innerHTML = `${Math.ceil(Math.max(0, selectedTemplate.target - progress))} <small>m tersisa</small>`;
     progressLabel.textContent = "TERSISA";
     distanceNode.textContent = distance.toFixed(0);
     progressBar.style.width = `${Math.min(progress / selectedTemplate.target, 1) * 100}%`;
@@ -190,7 +208,8 @@ export function initDragMeter(showToast, getGpsState) {
     startButton.classList.toggle("hidden", active);
     cancelButton.classList.toggle("hidden", !active);
     templateSelect.disabled = active;
-    bikeSelect.disabled = active;
+    bikeNameInput.disabled = active;
+    document.getElementById("newDragSession").disabled = active;
     document.getElementById("dragRollout").disabled = active;
   }
 
@@ -242,9 +261,9 @@ export function initDragMeter(showToast, getGpsState) {
     releaseWakeLock();
     statusNode.textContent = "RUN SELESAI";
     timeNode.innerHTML = `${seconds.toFixed(2)}<span> s</span>`;
-    const { bikes, unit } = getData();
+    const { unit } = getData();
     const factor = unit === "mph" ? 0.621371 : 1;
-    const bikeName = bikes.find((bike) => bike.id === bikeSelect.value)?.name || "Motor tidak dipilih";
+    const bikeName = normalizedBikeName();
     const averageAccuracy = runAccuracies.length
       ? runAccuracies.reduce((sum, value) => sum + value, 0) / runAccuracies.length
       : null;
@@ -299,14 +318,12 @@ export function initDragMeter(showToast, getGpsState) {
       showToast("Percobaan tidak valid, coba ulang");
       return;
     }
-    const bike = bikes.find((item) => item.id === bikeSelect.value);
-    const result = addResult({
+    const result = addDragResult({
       dragRun: true,
       templateName: selectedTemplate.name,
-      templateType: selectedTemplate.type,
+      templateType: "distance",
       target: Number(selectedTemplate.target),
       bikeName,
-      bikeId: bike?.id || "",
       time: seconds,
       finalSpeed,
       maxSpeed: Math.max(maximum, finalSpeed),
@@ -319,7 +336,7 @@ export function initDragMeter(showToast, getGpsState) {
       dragSplitDistances: [...runSplitDistances],
       rolloutEnabled: runRolloutEnabled,
       rolloutStatus: runRolloutEnabled ? "ON" : "OFF",
-      sessionId: CURRENT_SESSION_ID,
+      sessionId: runSessionId,
       valid: true
     });
     try {
@@ -354,7 +371,7 @@ export function initDragMeter(showToast, getGpsState) {
       ? fix.speed * 0.8 + sensorEstimatedSpeed * 3.6 * 0.2
       : fix.speed;
     const nextDistance = runDistance + segment;
-    const progress = selectedTemplate.type === "distance" ? nextDistance : correctedSpeed;
+    const progress = nextDistance;
     const crossed = progress >= selectedTemplate.target;
     const fraction = crossed && progress > previousProgress
       ? Math.min(1, Math.max(0, (selectedTemplate.target - previousProgress) / (progress - previousProgress)))
@@ -408,7 +425,7 @@ export function initDragMeter(showToast, getGpsState) {
     startSource = source;
     previousFix = anchor;
     previousSpeed = source === "GPS" ? 3 : anchor.speed || 0;
-    previousProgress = selectedTemplate.type === "speed" ? previousSpeed : 0;
+    previousProgress = 0;
     runDistance = 0;
     maximum = 0;
     stoppedSince = null;
@@ -530,10 +547,7 @@ export function initDragMeter(showToast, getGpsState) {
     sensorLastTimestamp = timestamp;
     latestMeasurementTimestamp = timestamp;
     updateSpeed(sensorEstimatedSpeed * 3.6);
-    showDistanceProgress(
-      selectedTemplate.type === "distance" ? runDistance + sensorSegmentDistance : sensorEstimatedSpeed * 3.6,
-      runDistance + sensorSegmentDistance
-    );
+    showDistanceProgress(runDistance + sensorSegmentDistance, runDistance + sensorSegmentDistance);
   }
 
   async function requestMotionPermission() {
@@ -556,6 +570,12 @@ export function initDragMeter(showToast, getGpsState) {
 
   async function begin() {
     if (mode !== "idle") return;
+    const bikeName = normalizedBikeName();
+    if (!bikeName) {
+      showToast("Isi nama motor dulu");
+      bikeNameInput.focus();
+      return;
+    }
     selectedTemplate = getData().templates.find((template) => template.id === templateSelect.value);
     if (!selectedTemplate) {
       showToast("Tambahkan template uji terlebih dahulu.");
@@ -590,6 +610,17 @@ export function initDragMeter(showToast, getGpsState) {
       return;
     }
 
+    try {
+      runSessionId = ensureDragSession(bikeName, matchingBike(bikeName)).id;
+      setLastMotorName(bikeName);
+    } catch (error) {
+      console.error("Sesi Drag gagal disimpan:", error);
+      mode = "idle";
+      setAttemptControls(false);
+      releaseWakeLock();
+      showToast("Sesi tidak dapat disimpan. Periksa ruang penyimpanan.");
+      return;
+    }
     mode = "ready";
     const runSettings = getData();
     runSplitDistances = [...runSettings.splitDistances];
@@ -610,6 +641,7 @@ export function initDragMeter(showToast, getGpsState) {
     sensorBias = null;
     consecutiveMotionSamples = 0;
     runAccuracies = [];
+    splitFixes = [];
     resultPanel.classList.add("hidden");
     if (motionEnabled) {
       window.addEventListener("devicemotion", handleMotion);
@@ -654,7 +686,37 @@ export function initDragMeter(showToast, getGpsState) {
   startButton.addEventListener("click", begin);
   cancelButton.addEventListener("click", () => cancel());
   templateSelect.addEventListener("change", () => updateProgress());
-  bikeSelect.addEventListener("change", () => setActiveBike(bikeSelect.value));
+  bikeNameInput.addEventListener("input", () => {
+    const name = normalizedBikeName();
+    setLastMotorName(name);
+    renderBikeSuggestions();
+  });
+  bikeNameInput.addEventListener("change", () => {
+    const name = normalizedBikeName();
+    if (!name) return;
+    try {
+      ensureDragSession(name, matchingBike(name));
+    } catch (error) {
+      console.error("Sesi Drag gagal diperbarui:", error);
+      showToast("Sesi tidak dapat disimpan. Periksa ruang penyimpanan.");
+    }
+  });
+  document.getElementById("newDragSession").addEventListener("click", () => {
+    const name = normalizedBikeName();
+    if (!name) {
+      showToast("Isi nama motor dulu");
+      bikeNameInput.focus();
+      return;
+    }
+    try {
+      startNewDragSession(name);
+      setLastMotorName(name);
+      showToast("Sesi baru dimulai.");
+    } catch (error) {
+      console.error("Sesi baru gagal disimpan:", error);
+      showToast("Sesi baru tidak dapat disimpan.");
+    }
+  });
   window.addEventListener("racebox:gps", handleGps);
   refreshChoices();
   return {

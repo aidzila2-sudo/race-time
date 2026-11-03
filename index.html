@@ -57,9 +57,10 @@
       <section class="view" id="view-drag" data-view="drag" aria-labelledby="dragTitle">
         <div class="view-heading"><div><p class="eyebrow">TIMED RUN <span>02 / 04</span></p><h1 id="dragTitle">Drag Meter</h1></div><span class="live-chip"><i></i> GPS READY</span></div>
         <div class="drag-selectors">
-          <label class="field-label">TEMPLATE UJI<select id="dragTemplate"></select></label>
-          <label class="field-label">MOTOR<select id="dragBike"></select></label>
+          <label class="field-label">TEMPLATE JARAK<select id="dragTemplate"></select></label>
+          <label class="field-label">NAMA MOTOR<input id="dragBikeName" type="text" list="bikeNameSuggestions" maxlength="40" autocomplete="off" placeholder="Contoh: Vario 160 stage 2" required><datalist id="bikeNameSuggestions"></datalist></label>
         </div>
+        <button class="text-button new-session-button" id="newDragSession" type="button">SESI BARU</button>
         <div class="drag-readout">
           <div class="drag-status" id="dragStatus">TEKAN SIAP UNTUK MEMULAI</div>
           <div class="drag-time" id="dragTime">0.00<span> s</span></div>
@@ -75,13 +76,12 @@
       <section class="view" id="view-history" data-view="history" aria-labelledby="historyTitle">
         <div class="view-heading"><div><p class="eyebrow">RUN ARCHIVE <span>03 / 04</span></p><h1 id="historyTitle">Drag History</h1></div><span class="gps-history-indicator" id="historyGpsStatus" role="img" aria-label="GPS menunggu"><i></i></span></div>
         <section class="drag-history-panel" aria-label="Drag History">
-          <div class="drag-history-meta"><time id="dragHistoryDate"></time><span id="dragHistoryRollout">1ft rollout: ON</span></div>
-          <label class="field-label">MOTOR<select id="historyBikeFilter"></select></label>
-          <div class="history-filter-row"><span>RENTANG</span><div class="segmented-control" role="group" aria-label="Rentang riwayat"><button type="button" data-history-range="session">Sesi ini</button><button type="button" data-history-range="today">Hari ini</button><button type="button" data-history-range="all">Semua</button></div></div>
-          <p class="best-results-label" id="bestResultsLabel">Best results of 0 runs:</p>
-          <div class="drag-split-table" id="bestSplitTable"></div>
-          <div class="drag-history-actions"><button class="button button-secondary" id="downloadDragCsv" type="button">Unduh CSV</button><button class="text-button" id="clearDragHistory" type="button">HAPUS SEMUA</button></div>
-          <div class="drag-runs-list" id="dragRunsList"></div>
+          <div class="session-filter-grid">
+            <label class="field-label">NAMA MOTOR<input id="historyNameFilter" type="search" list="historyNameSuggestions" placeholder="Semua motor"><datalist id="historyNameSuggestions"></datalist></label>
+            <label class="field-label">JARAK UJI<select id="historyDistanceFilter"><option value="">Semua jarak</option></select></label>
+          </div>
+          <div class="drag-session-groups" id="dragSessionGroups"></div>
+          <section class="legacy-drag-section hidden" id="legacyDragSection"><h2>Sebelum sesi</h2><div class="legacy-drag-runs" id="legacyDragRuns"></div></section>
           <p class="rollout-note">1 ft rollout: estimasi, GPS 1 Hz terbatas</p>
         </section>
         <div class="settings-block legacy-history-block"><div class="section-title"><div><span class="section-kicker">ARSIP</span><h2>Riwayat Uji Lainnya</h2></div><button class="text-button" id="clearHistory" type="button">HAPUS</button></div>
@@ -94,7 +94,7 @@
       <section class="view" id="view-settings" data-view="settings" aria-labelledby="settingsTitle">
         <div class="view-heading"><div><p class="eyebrow">GARAGE & SYSTEM <span>04 / 04</span></p><h1>Setelan</h1></div></div>
         <div class="settings-block"><div class="section-title"><div><span class="section-kicker">01 / GARASI</span><h2>Profil Motor</h2></div><button class="add-button" id="addBike" type="button" aria-label="Tambah motor">+</button></div><div id="bikeList" class="settings-list"></div></div>
-        <div class="settings-block"><div class="section-title"><div><span class="section-kicker">02 / DISTANCE & SPEED</span><h2>Template Uji</h2></div><button class="add-button" id="addTemplate" type="button" aria-label="Tambah template">+</button></div><div id="templateList" class="settings-list"></div></div>
+        <div class="settings-block"><div class="section-title"><div><span class="section-kicker">02 / JARAK</span><h2>Template Uji</h2></div><button class="add-button" id="addTemplate" type="button" aria-label="Tambah template">+</button></div><div id="templateList" class="settings-list"></div></div>
         <div class="settings-block unit-block"><div><span class="section-kicker">03 / PREFERENSI</span><h2>Satuan Kecepatan</h2></div><div class="segmented-control" role="group" aria-label="Satuan kecepatan"><button type="button" data-unit="kmh">KM/J</button><button type="button" data-unit="mph">MPH</button></div></div>
         <div class="settings-block motion-setting"><label class="motion-toggle" for="useMotionSensor"><span><span class="section-kicker">04 / EKSPERIMENTAL</span><strong>Gunakan sensor gerak</strong><small>Isi celah antar-fix GPS menggunakan akselerometer.</small></span><input id="useMotionSensor" type="checkbox" checked></label></div>
         <div class="settings-block drag-settings-block"><div class="section-title"><div><span class="section-kicker">05 / DRAG TIMER</span><h2>Split & Rollout</h2></div></div>

@@ -6,7 +6,7 @@ export function initSettings(openModal, showToast, onChange) {
   function render() {
     const { bikes, templates, unit, useMotionSensor, splitDistances, oneFootRollout } = getData();
     document.getElementById("bikeList").innerHTML = bikes.length ? bikes.map((bike) => `<div class="setting-row"><button class="button setting-row-main edit-bike" data-id="${bike.id}" type="button"><strong>${escapeHtml(bike.name)}</strong><span>${escapeHtml([bike.brand, bike.cc ? `${bike.cc} cc` : "", bike.power ? `${bike.power} hp` : ""].filter(Boolean).join(" · ") || "Profil motor")}</span></button><button class="delete-button delete-bike" data-id="${bike.id}" type="button" aria-label="Hapus ${escapeHtml(bike.name)}">×</button></div>`).join("") : `<div class="settings-empty">Belum ada profil. Tambahkan motor untuk memilihnya saat uji.</div>`;
-    document.getElementById("templateList").innerHTML = templates.map((template) => `<div class="setting-row"><div class="setting-row-main"><strong>${escapeHtml(template.name)}</strong><span>${template.type === "speed" ? `KECEPATAN · ${template.target} km/j` : `JARAK · ${template.target} m`}</span></div>${template.builtIn ? `<span class="stock-tag">BAWAAN</span>` : `<button class="delete-button delete-template" data-id="${template.id}" type="button" aria-label="Hapus ${escapeHtml(template.name)}">×</button>`}</div>`).join("");
+    document.getElementById("templateList").innerHTML = templates.filter((template) => template.type === "distance").map((template) => `<div class="setting-row"><div class="setting-row-main"><strong>${escapeHtml(template.name)}</strong><span>Target jarak: ${template.target} m</span></div>${template.builtIn ? `<span class="stock-tag">BAWAAN</span>` : `<button class="delete-button delete-template" data-id="${template.id}" type="button" aria-label="Hapus ${escapeHtml(template.name)}">×</button>`}</div>`).join("");
     document.querySelectorAll("[data-unit]").forEach((button) => button.classList.toggle("selected", button.dataset.unit === unit));
     const motionToggle = document.getElementById("useMotionSensor");
     motionToggle.checked = useMotionSensor !== false;
@@ -34,12 +34,11 @@ export function initSettings(openModal, showToast, onChange) {
   }
 
   function templateForm() {
-    openModal({ kicker: "DRAG METER / TEMPLATE", title: "Template Baru", content: `<form id="templateForm" class="sheet-form"><label>Nama template<input name="name" required maxlength="40" placeholder="Contoh: 0-80 km/j"></label><label>Jenis pengujian<select name="type"><option value="speed">Kecepatan (km/j)</option><option value="distance">Jarak (meter)</option></select></label><label>Target<input name="target" type="number" required min="1" max="10000" inputmode="numeric" placeholder="80"></label><button class="button button-primary" type="submit">SIMPAN TEMPLATE</button></form>` });
+    openModal({ kicker: "DRAG METER / TEMPLATE", title: "Template Jarak Baru", content: `<form id="templateForm" class="sheet-form"><label>Nama template<input name="name" required maxlength="40" placeholder="Contoh: 0 - 300 meter"></label><label>Nilai target (meter)<input name="target" type="number" required min="1" max="10000" inputmode="numeric" placeholder="300"></label><button class="button button-primary" type="submit">SIMPAN TEMPLATE</button></form>` });
     document.getElementById("templateForm").addEventListener("submit", (event) => {
       event.preventDefault();
       const fields = new FormData(event.currentTarget);
-      const type = fields.get("type");
-      addTemplate({ name: fields.get("name").trim(), type, target: Number(fields.get("target")) });
+      addTemplate({ name: fields.get("name").trim(), type: "distance", target: Number(fields.get("target")) });
       render();
       onChange();
       document.getElementById("modalBackdrop").classList.add("hidden");

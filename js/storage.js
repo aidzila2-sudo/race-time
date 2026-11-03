@@ -1,7 +1,9 @@
 const STORAGE_KEY = "racebox:data:v1";
 const ATTEMPT_LOG_PREFIX = "racebox:attempt-log:";
 const TEMPLATES_VERSION_KEY = "racebox_templates_version";
-const TEMPLATES_VERSION = "2";
+const TEMPLATES_VERSION = "3";
+const SESSIONS_VERSION_KEY = "racebox_sessions_version";
+const SESSIONS_VERSION = "1";
 const SPLITS_VERSION_KEY = "racebox_splits_version";
 const SPLITS_VERSION = "2";
 const DEFAULT_SPLIT_DISTANCES = [20, 100, 201, 203];
@@ -9,15 +11,11 @@ const LEGACY_DEFAULT_SPLIT_DISTANCES = [
   [21, 101, 201, 250],
   [18, 100, 201, 250]
 ];
-export const CURRENT_SESSION_ID = crypto.randomUUID();
-
 const DEFAULT_TEMPLATES = [
-  { id: "builtin-0-60", name: "0-60 km/j", type: "speed", target: 60, builtIn: true },
-  { id: "builtin-0-100", name: "0-100 km/j", type: "speed", target: 100, builtIn: true },
-  { id: "builtin-100m", name: "0-100 m", type: "distance", target: 100, builtIn: true },
+  { id: "builtin-100m", name: "0 - 100 m", type: "distance", target: 100, builtIn: true },
   { id: "builtin-201m", name: "0 - 201 meter", type: "distance", target: 201, builtIn: true },
-  { id: "builtin-402m", name: "0 - 402 meter", type: "distance", target: 402, builtIn: true },
-  { id: "builtin-500m", name: "0 - 500 meter", type: "distance", target: 500, builtIn: true }
+  { id: "builtin-402m", name: "0 - 402 m", type: "distance", target: 402, builtIn: true },
+  { id: "builtin-500m", name: "0 - 500 m", type: "distance", target: 500, builtIn: true }
 ];
 
 const DEFAULT_DATA = {
@@ -25,6 +23,9 @@ const DEFAULT_DATA = {
   bikes: [],
   templates: DEFAULT_TEMPLATES,
   history: [],
+  dragSessions: [],
+  activeDragSessionId: "",
+  lastMotorName: "",
   unit: "kmh",
   useMotionSensor: true,
   splitDistances: DEFAULT_SPLIT_DISTANCES,
@@ -34,6 +35,99 @@ const DEFAULT_DATA = {
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function localDateKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function createDragSession(name, bikeProfile = null) {
+  const session = {
+    id: crypto.randomUUID(),
+    bikeName: name,
+    bikeProfile: bikeProfile ? { ...bikeProfile } : null,
+    date: localDateKey(),
+    createdAt: new Date().toISOString()
+  };
+  data.dragSessions = [session, ...data.dragSessions];
+  data.activeDragSessionId = session.id;
+  data.lastMotorName = name;
+  persist();
+  return session;
+}
+
+export function ensureDragSession(name, bikeProfile = null, forceNew = false) {
+  const normalizedName = String(name || "").trim().slice(0, 40);
+  if (!normalizedName) throw new Error("Nama motor wajib diisi.");
+  const today = localDateKey();
+  const active = data.dragSessions.find((session) => session.id === data.activeDragSessionId);
+  if (!forceNew && active && active.bikeName === normalizedName && active.date === today) {
+    if (bikeProfile && JSON.stringify(active.bikeProfile) !== JSON.stringify(bikeProfile)) {
+      active.bikeProfile = { ...bikeProfile };
+      persist();
+    }
+    data.lastMotorName = normalizedName;
+    return active;
+  }
+  return createDragSession(normalizedName, bikeProfile);
+}
+
+export function addDragResult(result) {
+  const session = data.dragSessions.find((item) => item.id === result.sessionId);
+  if (!session) throw new Error("Sesi Drag tidak ditemukan.");
+  const runNumber = data.history.filter((item) => item.sessionId === session.id && item.dragRun).length + 1;
+  return addResult({
+    ...result,
+    dragRun: true,
+    bikeName: session.bikeName,
+    bikeProfile: session.bikeProfile,
+    runNumber,
+    sessionDate: session.date
+  });
+}
+
+export function setLastMotorName(name) {
+  data.lastMotorName = String(name || "").trim().slice(0, 40);
+  persist();
+}
+
+export function getMotorNameSuggestions() {
+  return [...new Set([
+    ...data.history.map((result) => result.bikeName),
+    ...data.bikes.map((bike) => bike.name)
+  ].map((name) => String(name || "").trim()).filter(Boolean))];
+}
+
+export function startNewDragSession(name) {
+  const normalizedName = String(name || "").trim().slice(0, 40);
+  if (!normalizedName) throw new Error("Nama motor wajib diisi.");
+  const bike = data.bikes.find((item) => item.name.trim().toLocaleLowerCase() === normalizedName.toLocaleLowerCase());
+  return createDragSession(normalizedName, bike ? { ...bike } : null);
+}
+
+export function renameDragSession(id, name) {
+  const normalizedName = String(name || "").trim().slice(0, 40);
+  if (!normalizedName) throw new Error("Nama motor wajib diisi.");
+  const session = data.dragSessions.find((item) => item.id === id);
+  if (!session) throw new Error("Sesi Drag tidak ditemukan.");
+  session.bikeName = normalizedName;
+  const bike = data.bikes.find((item) => item.name.trim().toLocaleLowerCase() === normalizedName.toLocaleLowerCase());
+  session.bikeProfile = bike ? { ...bike } : null;
+  data.history = data.history.map((result) => result.sessionId === id
+    ? { ...result, bikeName: normalizedName, bikeProfile: session.bikeProfile }
+    : result);
+  if (data.activeDragSessionId === id) data.lastMotorName = normalizedName;
+  persist();
+  return session;
+}
+
+export function deleteDragSession(id) {
+  const runIds = data.history.filter((result) => result.sessionId === id).map((result) => result.id);
+  runIds.forEach((runId) => localStorage.removeItem(`${ATTEMPT_LOG_PREFIX}${runId}`));
+  data.history = data.history.filter((result) => result.sessionId !== id);
+  data.dragSessions = data.dragSessions.filter((session) => session.id !== id);
+  if (data.activeDragSessionId === id) data.activeDragSessionId = "";
+  persist();
 }
 
 function readData() {
@@ -46,6 +140,9 @@ function readData() {
       templates: Array.isArray(saved.templates) ? saved.templates : clone(DEFAULT_TEMPLATES),
       bikes: Array.isArray(saved.bikes) ? saved.bikes : [],
       history: Array.isArray(saved.history) ? saved.history : [],
+      dragSessions: Array.isArray(saved.dragSessions) ? saved.dragSessions : [],
+      activeDragSessionId: typeof saved.activeDragSessionId === "string" ? saved.activeDragSessionId : "",
+      lastMotorName: typeof saved.lastMotorName === "string" ? saved.lastMotorName.slice(0, 40) : "",
       splitDistances: Array.isArray(saved.splitDistances)
         ? [...new Set(saved.splitDistances.map(Number).filter((distance) => Number.isFinite(distance) && distance > 0))].slice(0, 8)
         : [...DEFAULT_SPLIT_DISTANCES],
@@ -82,7 +179,8 @@ function migrateSplitDistances() {
 function migrateTemplates() {
   if (localStorage.getItem(TEMPLATES_VERSION_KEY) === TEMPLATES_VERSION) return;
 
-  let changed = false;
+  let changed = data.templates.some((template) => template.type === "speed");
+  data.templates = data.templates.filter((template) => template.type !== "speed");
   DEFAULT_TEMPLATES.forEach((template) => {
     const existing = data.templates.find((item) => item.type === template.type && Number(item.target) === template.target);
     if (!existing) {
@@ -98,8 +196,21 @@ function migrateTemplates() {
   localStorage.setItem(TEMPLATES_VERSION_KEY, TEMPLATES_VERSION);
 }
 
+function migrateSessions() {
+  if (localStorage.getItem(SESSIONS_VERSION_KEY) === SESSIONS_VERSION) return;
+  data.history.forEach((result) => {
+    if (result.dragRun && !data.dragSessions.some((session) => session.id === result.sessionId)) {
+      result.beforeSessions = true;
+      delete result.sessionId;
+    }
+  });
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  localStorage.setItem(SESSIONS_VERSION_KEY, SESSIONS_VERSION);
+}
+
 migrateSplitDistances();
 migrateTemplates();
+migrateSessions();
 const listeners = new Set();
 
 function persist() {
@@ -137,7 +248,7 @@ export function deleteBike(id) {
 }
 
 export function addTemplate(template) {
-  const next = { ...template, id: crypto.randomUUID(), builtIn: false };
+  const next = { ...template, type: "distance", id: crypto.randomUUID(), builtIn: false };
   data.templates = [...data.templates, next];
   persist();
   return next;
@@ -156,8 +267,16 @@ export function addResult(result) {
 }
 
 export function deleteResult(id) {
+  const removed = data.history.find((result) => result.id === id);
   localStorage.removeItem(`${ATTEMPT_LOG_PREFIX}${id}`);
   data.history = data.history.filter((result) => result.id !== id);
+  if (removed?.sessionId) {
+    data.history.filter((result) => result.sessionId === removed.sessionId)
+      .sort((first, second) => new Date(first.createdAt) - new Date(second.createdAt))
+      .forEach((result, index) => {
+        result.runNumber = index + 1;
+      });
+  }
   persist();
 }
 
@@ -166,6 +285,8 @@ export function clearDragHistory() {
     localStorage.removeItem(`${ATTEMPT_LOG_PREFIX}${result.id}`);
   });
   data.history = data.history.filter((result) => !result.dragRun);
+  data.dragSessions = [];
+  data.activeDragSessionId = "";
   persist();
 }
 
@@ -217,7 +338,7 @@ export function setActiveBike(id) {
 }
 
 export function resetAllData() {
-  const appKeys = [STORAGE_KEY, TEMPLATES_VERSION_KEY, SPLITS_VERSION_KEY];
+  const appKeys = [STORAGE_KEY, TEMPLATES_VERSION_KEY, SPLITS_VERSION_KEY, SESSIONS_VERSION_KEY];
   Object.keys(localStorage).forEach((key) => {
     if (key.startsWith(ATTEMPT_LOG_PREFIX)) appKeys.push(key);
   });

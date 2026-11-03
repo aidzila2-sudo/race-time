@@ -1,22 +1,19 @@
-import { clearDragHistory, clearLegacyHistory, CURRENT_SESSION_ID, deleteResult, getAttemptLog, getData } from "./storage.js";
+import {
+  clearLegacyHistory, deleteDragSession, deleteResult, getAttemptLog, getData, getMotorNameSuggestions, renameDragSession
+} from "./storage.js";
 
 const escapeHtml = (value = "") => String(value).replace(/[&<>\"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[char]);
 const escapeCsv = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
-let selectedBike = "";
-let selectedRange = "session";
-let bikeFilterInitialized = false;
+let selectedBikeName = "";
+let selectedDistance = "";
 
 function isCorruptResult(item) {
   if (item.valid === false || item.isValid === false) return true;
   const time = Number(item.time);
   const distance = Number(item.distance);
   if (!Number.isFinite(time) || time <= 0 || !Number.isFinite(distance) || distance <= 0) return true;
-  const target = Number(item.target);
-  const shortDistanceRun = item.templateType === "distance"
-    ? Number.isFinite(target) && target <= 500
-    : !item.templateType && distance <= 500;
   const averageSpeed = distance / time * 3.6;
-  return (shortDistanceRun && time > 60) || averageSpeed > 400 || averageSpeed < 3;
+  return averageSpeed > 400 || averageSpeed < 3;
 }
 
 function formatRunDate(value) {
@@ -26,80 +23,123 @@ function formatRunDate(value) {
   return `${datePart} ${timePart}`;
 }
 
+function formatSessionDate(value) {
+  const [year, month, day] = String(value || "").split("-").map(Number);
+  return Number.isFinite(year) && Number.isFinite(month) && Number.isFinite(day)
+    ? new Intl.DateTimeFormat("id-ID", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(year, month - 1, day))
+    : formatRunDate(value);
+}
+
 function splitTable(splits, className = "", distances = []) {
-  const splitByDistance = new Map(splits.map((split) => [Number(split.distance), split]));
+  const splitByDistance = new Map((Array.isArray(splits) ? splits : []).map((split) => [Number(split.distance), split]));
   const rows = distances.map((distance) => {
     const split = splitByDistance.get(Number(distance));
     return `<tr class="${Number(distance) === 201 ? "primary-split" : ""}"><td>${Number(distance).toFixed(0)}</td><td>${split ? Number(split.time).toFixed(2) : "--"}</td><td>${split ? Number(split.speed).toFixed(2) : "--"}</td></tr>`;
   }).join("");
-  return `<table class="split-table ${className}"><thead><tr><th>JARAK (m)</th><th>WAKTU (s)</th><th>KECEPATAN (km/j)</th></tr></thead><tbody>${rows || `<tr><td colspan="3" class="no-splits">Belum mencapai jarak split.</td></tr>`}</tbody></table>`;
+  return `<table class="split-table ${className}"><thead><tr><th>JARAK (m)</th><th>WAKTU (s)</th><th>KECEPATAN (km/j)</th></tr></thead><tbody>${rows || `<tr><td colspan="3" class="no-splits">Belum ada data split.</td></tr>`}</tbody></table>`;
 }
 
-function downloadDragCsv(runs) {
-  const columns = ["run", "tanggal", "motor", "rollout", "jarak_m", "waktu_s", "kecepatan_kmh", "kecepatan_maks_kmh"];
-  const rows = runs.flatMap((run, index) => (run.dragSplits || []).map((split) => [
-    index + 1, run.createdAt, run.bikeName, run.rolloutStatus || (run.rolloutEnabled ? "ON" : "OFF"),
-    split.distance, Number(split.time).toFixed(2), Number(split.speed).toFixed(2), Number(run.maxSpeed || 0).toFixed(2)
-  ]));
+function downloadSessionCsv(session, runs) {
+  const columns = [
+    "sesi_id", "nama_motor", "tanggal_sesi", "run", "tanggal_run", "jarak_uji_m",
+    "waktu_total_s", "kecepatan_akhir_kmh", "kecepatan_maks_kmh", "split_m",
+    "split_waktu_s", "split_kecepatan_kmh", "rollout"
+  ];
+  const rows = runs.flatMap((run, index) => {
+    const splits = Array.isArray(run.dragSplits) ? run.dragSplits : [];
+    if (!splits.length) return [[
+      session.id, session.bikeName, session.date, run.runNumber || index + 1, run.createdAt,
+      run.target, run.time, run.finalSpeed, run.maxSpeed, "", "", "", run.rolloutStatus || ""
+    ]];
+    return splits.map((split) => [
+      session.id, session.bikeName, session.date, run.runNumber || index + 1, run.createdAt,
+      run.target, Number(run.time).toFixed(2), Number(run.finalSpeed || 0).toFixed(2),
+      Number(run.maxSpeed || 0).toFixed(2), split.distance, Number(split.time).toFixed(2),
+      Number(split.speed).toFixed(2), run.rolloutStatus || ""
+    ]);
+  });
   const csv = [columns, ...rows].map((row) => row.map(escapeCsv).join(",")).join("\r\n");
   const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
-  link.download = "racebox-drag-history.csv";
+  link.download = `racebox-sesi-${session.date}-${session.id.slice(0, 8)}.csv`;
   document.body.append(link);
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function renderDragHistory() {
-  const data = getData();
-  const allRuns = data.history.filter((item) => item.dragRun && item.valid !== false);
-  const filter = document.getElementById("historyBikeFilter");
-  if (!bikeFilterInitialized) {
-    selectedBike = data.activeBikeId || "";
-    bikeFilterInitialized = true;
-  }
-  filter.innerHTML = `<option value="">Semua motor</option>${data.bikes.map((bike) => `<option value="${escapeHtml(bike.id)}">${escapeHtml(bike.name)}</option>`).join("")}`;
-  filter.value = data.bikes.some((bike) => bike.id === selectedBike) ? selectedBike : "";
-  selectedBike = filter.value;
-
-  const today = new Date().toDateString();
-  const runs = allRuns.filter((run) => {
-    if (selectedBike && run.bikeId !== selectedBike) return false;
-    if (selectedRange === "session" && run.sessionId !== CURRENT_SESSION_ID) return false;
-    if (selectedRange === "today" && new Date(run.createdAt).toDateString() !== today) return false;
-    return true;
-  });
-  const latest = runs[0];
-  document.getElementById("dragHistoryDate").textContent = latest ? formatRunDate(latest.createdAt) : "--";
-  document.getElementById("dragHistoryRollout").textContent = `1ft rollout: ${latest
-    ? latest.rolloutStatus || (latest.rolloutEnabled ? "ON" : "OFF")
-    : data.oneFootRollout ? "ON" : "OFF"}`;
-  document.getElementById("bestResultsLabel").textContent = `Best results of ${runs.length} runs:`;
-  document.querySelectorAll("[data-history-range]").forEach((button) => {
-    button.classList.toggle("selected", button.dataset.historyRange === selectedRange);
-  });
-
-  const bestByDistance = new Map();
+function sessionBestTable(runs, splitDistances) {
+  const best = new Map();
   runs.forEach((run) => (run.dragSplits || []).forEach((split) => {
-    const prior = bestByDistance.get(Number(split.distance));
-    if (!prior || Number(split.time) < Number(prior.time)) bestByDistance.set(Number(split.distance), split);
+    const prior = best.get(Number(split.distance));
+    if (!prior || Number(split.time) < Number(prior.time)) best.set(Number(split.distance), split);
   }));
-  const bestSplits = [...bestByDistance.entries()]
-    .sort(([first], [second]) => first - second)
-    .map(([, split]) => split);
-  document.getElementById("bestSplitTable").innerHTML = splitTable(bestSplits, "", data.splitDistances);
-  document.getElementById("dragRunsList").innerHTML = runs.length ? runs.map((run, index) => `
-    <details class="drag-run-item">
-      <summary><span><strong>Run ${index + 1}</strong><small>${escapeHtml(formatRunDate(run.createdAt))} · ${escapeHtml(run.bikeName || "Motor tidak dipilih")}</small></span><b>${Number(run.maxSpeed || 0).toFixed(2)} km/j maks</b></summary>
-      <div class="drag-run-details">${splitTable(run.dragSplits || [], "run-split-table", run.dragSplitDistances || data.splitDistances)}<button class="text-button delete-drag-run" data-run-id="${escapeHtml(run.id)}" type="button">HAPUS PERCOBAAN</button></div>
-    </details>`).join("") : `<p class="drag-empty">Belum ada percobaan drag untuk filter ini.</p>`;
+  const distances = [...new Set([...splitDistances, ...best.keys()])].sort((first, second) => first - second);
+  return splitTable([...best.values()], "session-best-table", distances);
+}
+
+function renderDragSessions() {
+  const data = getData();
+  const knownSessionIds = new Set(data.dragSessions.map((session) => session.id));
+  const allRuns = data.history.filter((item) => item.dragRun && item.valid !== false && knownSessionIds.has(item.sessionId));
+  const legacyRuns = data.history.filter((item) => !knownSessionIds.has(item.sessionId));
+  const filterInput = document.getElementById("historyNameFilter");
+  selectedBikeName = filterInput.value.trim();
+  const suggestions = getMotorNameSuggestions();
+  document.getElementById("historyNameSuggestions").innerHTML = suggestions
+    .map((name) => `<option value="${escapeHtml(name)}"></option>`).join("");
+  const distanceFilter = document.getElementById("historyDistanceFilter");
+  const distances = [...new Set([...allRuns, ...legacyRuns]
+    .filter((run) => run.templateType !== "speed")
+    .map((run) => Number(run.target)).filter((target) => Number.isFinite(target) && target > 0))]
+    .sort((first, second) => first - second);
+  distanceFilter.innerHTML = `<option value="">Semua jarak</option>${distances.map((distance) => `<option value="${distance}">${distance} m</option>`).join("")}`;
+  if (!distances.includes(Number(selectedDistance))) selectedDistance = "";
+  distanceFilter.value = selectedDistance;
+
+  const sessions = data.dragSessions.map((session) => ({
+    ...session,
+    runs: allRuns.filter((run) => run.sessionId === session.id)
+      .filter((run) => !selectedDistance || Number(run.target) === Number(selectedDistance))
+      .sort((first, second) => new Date(first.createdAt) - new Date(second.createdAt))
+  })).filter((session) => session.runs.length
+    && (!selectedBikeName || session.bikeName.toLocaleLowerCase().includes(selectedBikeName.toLocaleLowerCase())))
+    .sort((first, second) => new Date(second.createdAt) - new Date(first.createdAt));
+
+  document.getElementById("dragSessionGroups").innerHTML = sessions.length ? sessions.map((session) => `
+    <article class="drag-session-card">
+      <header class="drag-session-header">
+        <div><h2>${escapeHtml(session.bikeName)} <span>· ${escapeHtml(formatSessionDate(session.date))}</span></h2><p>${session.runs.length} run${session.runs.length === 1 ? "" : "s"}${session.bikeProfile ? ` · ${escapeHtml([session.bikeProfile.brand, session.bikeProfile.cc ? `${session.bikeProfile.cc} cc` : "", session.bikeProfile.power ? `${session.bikeProfile.power} hp` : "", session.bikeProfile.weight ? `${session.bikeProfile.weight} kg` : ""].filter(Boolean).join(" · "))}` : ""}</p></div>
+        <div class="session-actions">
+          <button class="session-action" data-session-action="csv" data-session-id="${escapeHtml(session.id)}" type="button">CSV</button>
+          <button class="session-action" data-session-action="rename" data-session-id="${escapeHtml(session.id)}" type="button">GANTI NAMA</button>
+          <button class="session-action danger" data-session-action="delete" data-session-id="${escapeHtml(session.id)}" type="button">HAPUS SESI</button>
+        </div>
+      </header>
+      <h3>Hasil terbaik per jarak</h3>${sessionBestTable(session.runs, data.splitDistances)}
+      <div class="session-run-list">${session.runs.map((run, index) => `
+        <details class="session-run-item">
+          <summary><span><strong>Run ${run.runNumber || index + 1} · ${Number(run.target).toFixed(0)} m</strong><small>${escapeHtml(formatRunDate(run.createdAt))}</small></span><b>${Number(run.time).toFixed(2)} s · ${Number(run.finalSpeed || 0).toFixed(2)} km/j</b></summary>
+          <div class="session-run-details">${splitTable(run.dragSplits || [], "run-split-table", run.dragSplitDistances || data.splitDistances)}<div class="session-run-metrics"><span>KEC. MAKS<strong>${Number(run.maxSpeed || 0).toFixed(2)} km/j</strong></span><span>KEC. AKHIR<strong>${Number(run.finalSpeed || 0).toFixed(2)} km/j</strong></span></div><button class="text-button delete-session-run" data-run-id="${escapeHtml(run.id)}" type="button">HAPUS PERCOBAAN</button></div>
+        </details>`).join("")}</div>
+    </article>`).join("") : `<p class="drag-empty">Belum ada sesi untuk filter ini.</p>`;
+
+  const filteredLegacyRuns = legacyRuns
+    .filter((run) => !selectedBikeName || String(run.bikeName || "").toLocaleLowerCase().includes(selectedBikeName.toLocaleLowerCase()))
+    .filter((run) => !selectedDistance || Number(run.target) === Number(selectedDistance))
+    .sort((first, second) => new Date(second.createdAt) - new Date(first.createdAt));
+  const legacySection = document.getElementById("legacyDragSection");
+  legacySection.classList.toggle("hidden", filteredLegacyRuns.length === 0);
+  document.getElementById("legacyDragRuns").innerHTML = filteredLegacyRuns.map((run, index) => {
+    const target = run.templateType === "speed" ? run.templateName : `${run.target || "--"} m`;
+    return `<article class="legacy-drag-run"><strong>${escapeHtml(run.bikeName || "Nama motor tidak tersedia")} · ${escapeHtml(target)}</strong><span>${escapeHtml(formatRunDate(run.createdAt))} · Run ${index + 1}</span><b>${Number(run.time || 0).toFixed(2)} s · ${Number(run.finalSpeed || 0).toFixed(2)} km/j</b></article>`;
+  }).join("");
 }
 
 function downloadAttemptLog(resultId) {
-  const log = getData().history.find((item) => item.id === resultId);
-  if (!log) throw new Error("Hasil uji tidak ditemukan.");
+  const result = getData().history.find((item) => item.id === resultId);
+  if (!result) throw new Error("Hasil uji tidak ditemukan.");
   const attemptLog = getAttemptLog(resultId);
   const columns = [
     "position_timestamp", "arrival_perf_ms", "latency_ms", "fix_perf_ms", "cumulative_distance_m",
@@ -123,13 +163,14 @@ function downloadAttemptLog(resultId) {
 }
 
 export function renderHistory() {
-  renderDragHistory();
+  renderDragSessions();
   const { history, unit } = getData();
-  const archive = history.filter((item) => !item.dragRun);
+  const sessionIds = new Set(getData().dragSessions.map((session) => session.id));
+  const archive = history.filter((item) => !item.dragRun && sessionIds.has(item.sessionId));
   const list = document.getElementById("historyList");
   const empty = document.getElementById("historyEmpty");
   const summary = document.getElementById("historySummary");
-  empty.classList.toggle("hidden", archive.length > 0);
+  empty.classList.toggle("hidden", archive.length > 0 || history.length > 0);
   list.classList.toggle("hidden", archive.length === 0);
   const factor = unit === "mph" ? 0.621371 : 1;
   const validHistory = archive.filter((item) => !isCorruptResult(item));
@@ -159,36 +200,49 @@ export function initHistory(showToast) {
       showToast("Log percobaan tidak dapat dibaca.");
     }
   });
-  document.getElementById("historyBikeFilter").addEventListener("change", (event) => {
-    selectedBike = event.currentTarget.value;
+  document.getElementById("historyNameFilter").addEventListener("input", renderHistory);
+  document.getElementById("historyDistanceFilter").addEventListener("change", (event) => {
+    selectedDistance = event.currentTarget.value;
     renderHistory();
   });
-  document.querySelectorAll("[data-history-range]").forEach((button) => button.addEventListener("click", () => {
-    selectedRange = button.dataset.historyRange;
-    renderHistory();
-  }));
-  document.getElementById("dragRunsList").addEventListener("click", (event) => {
-    const button = event.target.closest(".delete-drag-run");
-    if (!button || !window.confirm("Hapus percobaan drag ini?")) return;
+  document.getElementById("dragSessionGroups").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-session-action]");
+    if (!button) return;
+    const data = getData();
+    const session = data.dragSessions.find((item) => item.id === button.dataset.sessionId);
+    if (!session) return;
+    if (button.dataset.sessionAction === "csv") {
+      try {
+        downloadSessionCsv(session, data.history.filter((run) => run.sessionId === session.id && run.dragRun));
+      } catch (error) {
+        console.error("CSV sesi gagal diunduh:", error);
+        showToast("CSV sesi tidak dapat diunduh.");
+      }
+    } else if (button.dataset.sessionAction === "rename") {
+      const name = window.prompt("Nama motor sesi:", session.bikeName);
+      if (name === null) return;
+      try {
+        renameDragSession(session.id, name);
+        if (getData().activeDragSessionId === session.id) {
+          document.getElementById("dragBikeName").value = getData().lastMotorName;
+        }
+        renderHistory();
+        showToast("Nama sesi diperbarui.");
+      } catch (error) {
+        showToast(error.message || "Nama sesi tidak valid.");
+      }
+    } else if (button.dataset.sessionAction === "delete" && window.confirm(`Hapus sesi ${session.bikeName} beserta semua percobaannya?`)) {
+      deleteDragSession(session.id);
+      renderHistory();
+      showToast("Sesi dihapus.");
+    }
+  });
+  document.getElementById("dragSessionGroups").addEventListener("click", (event) => {
+    const button = event.target.closest(".delete-session-run");
+    if (!button || !window.confirm("Hapus percobaan ini?")) return;
     deleteResult(button.dataset.runId);
     renderHistory();
-    showToast("Percobaan drag dihapus.");
-  });
-  document.getElementById("downloadDragCsv").addEventListener("click", () => {
-    try {
-      downloadDragCsv(getData().history.filter((item) => item.dragRun && item.valid !== false));
-    } catch (error) {
-      console.error("CSV Drag History gagal diunduh:", error);
-      showToast("CSV Drag History tidak dapat diunduh.");
-    }
-  });
-  document.getElementById("clearDragHistory").addEventListener("click", () => {
-    if (!getData().history.some((item) => item.dragRun)) return showToast("Drag History masih kosong.");
-    if (window.confirm("Hapus semua percobaan Drag History?")) {
-      clearDragHistory();
-      renderHistory();
-      showToast("Drag History berhasil dihapus.");
-    }
+    showToast("Percobaan dihapus.");
   });
   document.getElementById("clearHistory").addEventListener("click", () => {
     if (!getData().history.some((item) => !item.dragRun)) return showToast("Riwayat uji lainnya masih kosong.");
